@@ -5,7 +5,15 @@
 set -eu
 repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}"
 keep="${KEEP_RELEASES:-15}"
-products='aws-lc bun zlib-ng postgres valkey clickhouse pebble typesense zstd libgit2'
+products='aws-lc bun zlib-ng postgres valkey clickhouse pebble typesense zstd libgit2 sqlite-vec llama-embedding'
+
+# oci image mirrors derive their product names from the tracked list, so
+# pruning stays in sync without a second copy of the names.
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+while read -r name _ || [ -n "$name" ]; do
+	case "$name" in '' | '#'*) continue ;; esac
+	products="$products oci-$name"
+done <"$script_dir/oci-images.txt"
 
 # Guard the arithmetic below: keep=0 (or junk) would prune every release.
 case "$keep" in

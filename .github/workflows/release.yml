@@ -13,7 +13,8 @@ on:
         description: >-
           Product to force-rebuild (always builds and replaces its release assets). One of:
           aws-lc, bun, zlib-ng, postgres, valkey, clickhouse, pebble, typesense,
-          zstd, libgit2. Empty = check every product for upstream updates.
+          zstd, libgit2, sqlite-vec, llama-embedding, oci-mirror. Empty = check every
+          product for upstream updates.
         required: false
         type: string
       version:
@@ -22,6 +23,8 @@ on:
           postgres: pg/ts/vec/vchord e.g. 18.6/2.29.2/0.8.6/1.1.1
           valkey: server/bloom e.g. 9.1.2/1.0.1
           libgit2: libgit2/libssh2 e.g. 1.9.7/1.11.1
+          llama-embedding: bNNNN e.g. b10819
+          oci-mirror: name:tag from oci-images.txt e.g. cilium:v1.20.1
         required: false
         type: string
 
@@ -69,6 +72,12 @@ jobs:
       libgit2_ssh2: ${{ steps.resolve.outputs.libgit2_ssh2 }}
       libgit2_version: ${{ steps.resolve.outputs.libgit2_version }}
       libgit2_build: ${{ steps.resolve.outputs.libgit2_build }}
+      sqlite_vec_version: ${{ steps.resolve.outputs.sqlite_vec_version }}
+      sqlite_vec_build: ${{ steps.resolve.outputs.sqlite_vec_build }}
+      llama_embedding_version: ${{ steps.resolve.outputs.llama_embedding_version }}
+      llama_embedding_build: ${{ steps.resolve.outputs.llama_embedding_build }}
+      oci_matrix: ${{ steps.resolve.outputs.oci_matrix }}
+      oci_build: ${{ steps.resolve.outputs.oci_build }}
     steps:
       - name: Clone the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -789,6 +798,220 @@ jobs:
           - Licenses: GPL-2.0 with a linking exception (libgit2), BSD-3-Clause (bundled libssh2)
           EOF
 
+  # ------------------------------------------------------------- sqlite-vec
+  # Upstream ships the loadable vec0 extension; the repack only verifies and
+  # re-archives it. Each platform uses a native runner so the smoke test loads
+  # the packaged extension.
+  build-sqlite-vec:
+    needs: check
+    if: needs.check.outputs.sqlite_vec_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+          - platform: darwin-arm64
+            runs-on: macos-26
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Repack sqlite-vec release
+        env:
+          SQLITE_VEC_WORK: ${{ runner.temp }}/sqlite-vec-work
+          SQLITE_VEC_PLATFORMS: ${{ matrix.platform }}
+        run: sh scripts/sqlite-vec-repack.sh "${{ needs.check.outputs.sqlite_vec_version }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sqlite-vec-${{ matrix.platform }}
+          path: ${{ runner.temp }}/sqlite-vec-work/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-sqlite-vec:
+    needs: [check, build-sqlite-vec]
+    if: needs.check.outputs.sqlite_vec_build == 'true' && needs.build-sqlite-vec.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.check.outputs.sqlite_vec_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sqlite-vec-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          sh scripts/publish-release.sh "sqlite-vec/v${VERSION}" "sqlite-vec v${VERSION}" assets <<EOF
+          sqlite-vec ${VERSION} mirrored from asg017/sqlite-vec as max-zstd (level 22) tar.zst.
+
+          - Upstream: https://github.com/asg017/sqlite-vec/releases/tag/v${VERSION}
+          - Upstream checksums.txt was verified before repacking.
+          - Smoke-tested: the extension loads in SQLite and \`vec_version()\` reports \`v${VERSION}\`.
+          - Targets: linux-x64 (upstream linux-x86_64), linux-arm64 (linux-aarch64), darwin-arm64 (macos-aarch64).
+          - Layout: the archive root is \`opt/sqlite-vec\` — extract at \`/\` to install into \`/opt/sqlite-vec\`; the loadable extension is \`opt/sqlite-vec/lib/vec0.so\` (\`vec0.dylib\` on macOS). Extraction needs zstd: \`tar --zstd -xf <asset>\`
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - License: MIT (upstream)
+          EOF
+
+  # ---------------------------------------------------------- llama-embedding
+  # Upstream ships per-platform llama.cpp binary tarballs; the repack adds the
+  # pinned EmbeddingGemma GGUF and re-archives it. Each platform uses a native
+  # runner so the smoke test runs the packaged llama-cli.
+  build-llama-embedding:
+    needs: check
+    if: needs.check.outputs.llama_embedding_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+          - platform: darwin-arm64
+            runs-on: macos-26
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Repack llama-embedding release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LLAMA_EMBEDDING_WORK: ${{ runner.temp }}/llama-embedding-work
+          LLAMA_EMBEDDING_PLATFORMS: ${{ matrix.platform }}
+        run: sh scripts/llama-embedding-repack.sh "${{ needs.check.outputs.llama_embedding_version }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: llama-embedding-${{ matrix.platform }}
+          path: ${{ runner.temp }}/llama-embedding-work/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-llama-embedding:
+    needs: [check, build-llama-embedding]
+    if: needs.check.outputs.llama_embedding_build == 'true' && needs.build-llama-embedding.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.check.outputs.llama_embedding_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: llama-embedding-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          sh scripts/publish-release.sh "llama-embedding/v${VERSION}" "llama-embedding ${VERSION}" assets <<EOF
+          llama.cpp \`${VERSION}\` native libraries plus the pinned EmbeddingGemma GGUF, mirrored as max-zstd (level 22) tar.zst — the codetel llama-embedding test fixture.
+
+          - Upstream: https://github.com/ggml-org/llama.cpp/releases/tag/${VERSION} , https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF (revision 0f741b5a, embeddinggemma-300M-Q8_0.gguf, sha256 b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63)
+          - Each llama.cpp tarball was verified against its GitHub asset digest. The GGUF was verified against the pinned sha256 above.
+          - Smoke-tested: \`llama-cli --version\` runs and reports build ${VERSION#b}.
+          - Targets: linux-x64 (upstream ubuntu-x64), linux-arm64 (ubuntu-arm64), darwin-arm64 (macos-arm64).
+          - Layout: the archive root is \`opt/llama-embedding\` — extract at \`/\` to install into \`/opt/llama-embedding\`; native libraries and tools are in \`native/\`, and the model is \`models/embeddinggemma-300M-Q8_0.gguf\`. Extraction needs zstd: \`tar --zstd -xf <asset>\`
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - Licenses: MIT (llama.cpp); EmbeddingGemma is subject to the [Gemma Terms of Use](https://ai.google.dev/gemma/terms), including the prohibited-use policy. The archive includes the terms, policy, required \`NOTICE\`, and modification notice.
+          EOF
+
+  # ---------------------------------------------------------- oci mirrors
+  # One matrix cell per image: skopeo re-encodes every published arch to
+  # zstd:chunked in a single copy, so there is no separate platform matrix.
+  build-oci-mirror:
+    needs: check
+    if: needs.check.outputs.oci_build == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.check.outputs.oci_matrix) }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Mirror image as zstd:chunked OCI layout
+        env:
+          OCI_WORK: ${{ runner.temp }}/oci-mirror
+        run: sh scripts/oci-mirror.sh "${{ matrix.name }}" "${{ matrix.ref }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: oci-${{ matrix.name }}-${{ matrix.version }}
+          path: ${{ runner.temp }}/oci-mirror/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-oci-mirror:
+    needs: [check, build-oci-mirror]
+    if: needs.check.outputs.oci_build == 'true' && needs.build-oci-mirror.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: oci-*
+          path: assets
+      - name: Publish releases
+        run: |
+          set -eu
+          for dir in assets/*/; do
+            [ -f "$dir/release-info.env" ] || continue
+            . "$dir/release-info.env"
+            rm -f "$dir/release-info.env"
+            sh scripts/publish-release.sh "oci-$NAME/v$VERSION" "oci-$NAME $VERSION" "$dir" <<EOF
+          zstd:chunked mirror of upstream image \`$REF\`, packed as an OCI image layout in tar.zst.
+
+          - Upstream: \`$REF\` (top-level manifest digest \`$UPSTREAM_DIGEST\`)
+          - Repack: \`skopeo copy --all --dest-compress-format zstd:chunked --dest-compress-level 19 --dest-force-compress-format\`; all layers re-encoded, so digests differ from upstream. This layout's top-level digest: \`$OCI_DIGEST\`
+          - Layout: the archive root is \`oci-$NAME-$VERSION/\` — an OCI image layout (\`index.json\` + \`blobs/\`), tagged \`$TAG\`
+          - Use: extract, then seed a registry that accepts OCI zstd layers with \`skopeo copy --all --preserve-digests oci:oci-$NAME-$VERSION:$TAG docker://<registry>/<repo>:$TAG\`. Preserving digests keeps the zstd:chunked metadata so containers/storage clients with partial pulls enabled can use range requests and reuse chunks. The extracted layout can also feed an OCI-layout consumer directly (e.g. sync-oci-to-s3.sh, or \`skopeo copy oci:... oci-archive:...\` for \`ctr images import\`).
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - Licenses: unchanged from the upstream image; see its project and image metadata
+          EOF
+          done
+
   # ---------------------------------------------------------------- cleanup
   cleanup:
     needs:
@@ -803,6 +1026,9 @@ jobs:
         release-typesense,
         release-zstd,
         release-libgit2,
+        release-sqlite-vec,
+        release-llama-embedding,
+        release-oci-mirror,
       ]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04-arm
