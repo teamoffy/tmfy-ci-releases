@@ -51,9 +51,12 @@ chmod +x "$prefix/bin/pebble" "$prefix/bin/pebble-challtestsrv"
 "$prefix/bin/pebble-challtestsrv" -defaultIPv4 127.0.0.1 \
 	>"$work/challtestsrv.log" 2>&1 &
 challtestsrv_pid=$!
-PEBBLE_VA_NOSLEEP=1 PEBBLE_WFE_NONCEREJECT=0 \
-	"$prefix/bin/pebble" -config "$prefix/test/config/pebble-config.json" -strict=false \
-	-dnsserver 127.0.0.1:8053 >"$work/pebble.log" 2>&1 &
+(
+	cd "$prefix"
+	export PEBBLE_VA_NOSLEEP=1 PEBBLE_WFE_NONCEREJECT=0
+	exec "$prefix/bin/pebble" -config "$prefix/test/config/pebble-config.json" \
+		-strict=false -dnsserver 127.0.0.1:8053
+) >"$work/pebble.log" 2>&1 &
 pebble_pid=$!
 cleanup() {
 	kill "$pebble_pid" "$challtestsrv_pid" 2>/dev/null || true
@@ -63,7 +66,10 @@ for _ in $(seq 1 30); do
 	curl -ksf https://127.0.0.1:14000/dir >/dev/null && break
 	sleep 1
 done
-curl -ksf https://127.0.0.1:14000/dir >/dev/null
+curl -ksf https://127.0.0.1:14000/dir >/dev/null || {
+	cat "$work/pebble.log" >&2
+	exit 1
+}
 # Pack a quiesced tree: nothing should be writing under $prefix.
 cleanup
 trap - EXIT INT TERM
