@@ -1,0 +1,5 @@
+# Default work dirs for local `sh scripts/<product>-build.sh` runs.
+.*-work/
+
+# Local release staging.
+/assets/

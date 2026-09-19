@@ -1,0 +1,821 @@
+name: releases
+
+# One daily run for all products: check → parallel per-product builds →
+# per-product releases → shared cleanup. Force-rebuild one product via
+# workflow_dispatch (see inputs).
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      product:
+        description: >-
+          Product to force-rebuild (always builds and replaces its release assets). One of:
+          aws-lc, bun, zlib-ng, postgres, valkey, clickhouse, pebble, typesense,
+          zstd, libgit2. Empty = check every product for upstream updates.
+        required: false
+        type: string
+      version:
+        description: >-
+          Version for the forced product (upstream latest if empty).
+          postgres: pg/ts/vec/vchord e.g. 18.6/2.29.2/0.8.6/1.1.1
+          valkey: server/bloom e.g. 9.1.2/1.0.1
+          libgit2: libgit2/libssh2 e.g. 1.9.7/1.11.1
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: sh
+
+jobs:
+  check:
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    outputs:
+      aws_lc_version: ${{ steps.resolve.outputs.aws_lc_version }}
+      aws_lc_build: ${{ steps.resolve.outputs.aws_lc_build }}
+      bun_version: ${{ steps.resolve.outputs.bun_version }}
+      bun_build: ${{ steps.resolve.outputs.bun_build }}
+      zlib_ng_version: ${{ steps.resolve.outputs.zlib_ng_version }}
+      zlib_ng_build: ${{ steps.resolve.outputs.zlib_ng_build }}
+      postgres_pg: ${{ steps.resolve.outputs.postgres_pg }}
+      postgres_ts: ${{ steps.resolve.outputs.postgres_ts }}
+      postgres_vec: ${{ steps.resolve.outputs.postgres_vec }}
+      postgres_vchord: ${{ steps.resolve.outputs.postgres_vchord }}
+      postgres_version: ${{ steps.resolve.outputs.postgres_version }}
+      postgres_build: ${{ steps.resolve.outputs.postgres_build }}
+      valkey_server: ${{ steps.resolve.outputs.valkey_server }}
+      valkey_bloom: ${{ steps.resolve.outputs.valkey_bloom }}
+      valkey_version: ${{ steps.resolve.outputs.valkey_version }}
+      valkey_build: ${{ steps.resolve.outputs.valkey_build }}
+      clickhouse_version: ${{ steps.resolve.outputs.clickhouse_version }}
+      clickhouse_build: ${{ steps.resolve.outputs.clickhouse_build }}
+      pebble_version: ${{ steps.resolve.outputs.pebble_version }}
+      pebble_build: ${{ steps.resolve.outputs.pebble_build }}
+      typesense_version: ${{ steps.resolve.outputs.typesense_version }}
+      typesense_build: ${{ steps.resolve.outputs.typesense_build }}
+      zstd_version: ${{ steps.resolve.outputs.zstd_version }}
+      zstd_build: ${{ steps.resolve.outputs.zstd_build }}
+      libgit2_ver: ${{ steps.resolve.outputs.libgit2_ver }}
+      libgit2_ssh2: ${{ steps.resolve.outputs.libgit2_ssh2 }}
+      libgit2_version: ${{ steps.resolve.outputs.libgit2_version }}
+      libgit2_build: ${{ steps.resolve.outputs.libgit2_build }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Resolve target versions
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE_PRODUCT: ${{ inputs.product }}
+          FORCE_VERSION: ${{ inputs.version }}
+        run: sh scripts/check.sh
+
+  # --------------------------------------------------------------- aws-lc
+  build-aws-lc:
+    needs: check
+    if: needs.check.outputs.aws_lc_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+          - platform: darwin-arm64
+            runs-on: macos-26
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: Build and pack aws-lc
+        env:
+          AWS_LC_PLATFORM: ${{ matrix.platform }}
+          AWS_LC_WORK: ${{ runner.temp }}/aws-lc-build
+        run: sh scripts/aws-lc-build.sh "${{ needs.check.outputs.aws_lc_version }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aws-lc-${{ matrix.platform }}
+          path: ${{ runner.temp }}/aws-lc-build/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-aws-lc:
+    needs: [check, build-aws-lc]
+    if: needs.check.outputs.aws_lc_build == 'true' && needs.build-aws-lc.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.check.outputs.aws_lc_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: aws-lc-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          upstream_sha=$(head -n 1 assets/upstream-sha256.txt)
+          sh scripts/publish-release.sh "aws-lc/v${VERSION}" "aws-lc v${VERSION}" assets <<EOF
+          Prebuilt aws-lc v${VERSION} shared libraries for CI consumption.
+
+          - Upstream: https://github.com/aws/aws-lc/releases/tag/v${VERSION}
+          - Upstream source sha256: \`${upstream_sha}\`
+          - Build: cmake Release, shared libs (\`BUILD_SHARED_LIBS=1\`), tests off, \`DISABLE_CPU_JITTER_ENTROPY=ON\`
+          - Targets: linux-x64 (ubuntu-26.04 / gcc), linux-arm64 (ubuntu-26.04-arm / gcc), darwin-arm64 (macos-26 / clang)
+          - Layout: the archive root is \`opt/aws-lc\` — extract at \`/\` to install into \`/opt/aws-lc\`, then run \`sudo ldconfig\` on Linux. macOS dylibs carry \`/opt/aws-lc/lib\` install names.
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - Licenses: Apache-2.0 OR ISC for AWS-LC's own files; code inherited from BoringSSL/OpenSSL keeps its original terms — see the upstream LICENSE
+          EOF
+
+  # ------------------------------------------------------------------ bun
+  build-bun:
+    needs: check
+    if: needs.check.outputs.bun_build == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux-x64, linux-aarch64, darwin-x64, darwin-aarch64]
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Repack Bun release
+        env:
+          BUN_WORK: ${{ runner.temp }}/bun-work
+          BUN_PLATFORMS: ${{ matrix.platform }}
+        run: sh scripts/bun-repack.sh "${{ needs.check.outputs.bun_version }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bun-${{ matrix.platform }}
+          path: ${{ runner.temp }}/bun-work/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-bun:
+    needs: [check, build-bun]
+    if: needs.check.outputs.bun_build == 'true' && needs.build-bun.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.check.outputs.bun_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: bun-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          sh scripts/publish-release.sh "bun/v${VERSION}" "bun v${VERSION}" assets <<EOF
+          Bun v${VERSION} mirrored from oven-sh/bun as max-zstd (level 22) tar.zst.
+
+          - Upstream: https://github.com/oven-sh/bun/releases/tag/bun-v${VERSION}
+          - Upstream zip checksums were verified against SHASUMS256.txt before repacking.
+          - Variants: standard upstream builds; x64 requires AVX2. No \`-baseline\`, musl, or Windows variants.
+          - Layout: the archive root is \`bun-<platform>/\`, same as the official zips.
+          - Extraction needs zstd (preinstalled on GitHub runner images): \`tar --zstd -xf <asset>\`
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - Licenses: MIT for Bun itself; the binary statically links JavaScriptCore (LGPL-2.1) and other vendored libraries — see the upstream LICENSE.md
+          EOF
+
+  # --------------------------------------------------------------- zlib-ng
+  build-zlib-ng:
+    needs: check
+    if: needs.check.outputs.zlib_ng_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+          - platform: darwin-arm64
+            runs-on: macos-26
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Build and pack zlib-ng
+        env:
+          ZLIB_NG_PLATFORM: ${{ matrix.platform }}
+          ZLIB_NG_WORK: ${{ runner.temp }}/zlib-ng-build
+        run: sh scripts/zlib-ng-build.sh "${{ needs.check.outputs.zlib_ng_version }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zlib-ng-${{ matrix.platform }}
+          path: ${{ runner.temp }}/zlib-ng-build/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-zlib-ng:
+    needs: [check, build-zlib-ng]
+    if: needs.check.outputs.zlib_ng_build == 'true' && needs.build-zlib-ng.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.check.outputs.zlib_ng_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: zlib-ng-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          upstream_sha=$(head -n 1 assets/upstream-sha256.txt)
+          sh scripts/publish-release.sh "zlib-ng/v${VERSION}" "zlib-ng v${VERSION}" assets <<EOF
+          Prebuilt zlib-ng v${VERSION} shared libraries for CI consumption.
+
+          - Upstream: https://github.com/zlib-ng/zlib-ng/releases/tag/${VERSION}
+          - Upstream source sha256: \`${upstream_sha}\`
+          - Build: cmake Release, shared libs (\`BUILD_SHARED_LIBS=ON\`), \`ZLIB_COMPAT=OFF\` (zlib-ng API: \`zlib-ng.h\`, \`-lz-ng\`)
+          - Targets: linux-x64 (ubuntu-26.04 / gcc), linux-arm64 (ubuntu-26.04-arm / gcc), darwin-arm64 (macos-26 / clang)
+          - Layout: the archive root is \`opt/zlib-ng\` — extract at \`/\` to install into \`/opt/zlib-ng\`, then run \`sudo ldconfig\` on Linux. macOS dylibs carry \`/opt/zlib-ng/lib\` install names.
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - License: zlib (upstream)
+          EOF
+
+  # -------------------------------------------------------------- postgres
+  build-postgres:
+    needs: check
+    if: needs.check.outputs.postgres_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Build and pack postgres
+        env:
+          POSTGRES_PLATFORM: ${{ matrix.platform }}
+          POSTGRES_WORK: ${{ runner.temp }}/postgres-build
+        run: |
+          sh scripts/postgres-build.sh \
+            "${{ needs.check.outputs.postgres_pg }}" \
+            "${{ needs.check.outputs.postgres_ts }}" \
+            "${{ needs.check.outputs.postgres_vec }}" \
+            "${{ needs.check.outputs.postgres_vchord }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: postgres-${{ matrix.platform }}
+          path: ${{ runner.temp }}/postgres-build/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-postgres:
+    needs: [check, build-postgres]
+    if: needs.check.outputs.postgres_build == 'true' && needs.build-postgres.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PG: ${{ needs.check.outputs.postgres_pg }}
+      TS: ${{ needs.check.outputs.postgres_ts }}
+      VEC: ${{ needs.check.outputs.postgres_vec }}
+      VCHORD: ${{ needs.check.outputs.postgres_vchord }}
+      VERSION: ${{ needs.check.outputs.postgres_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: postgres-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          sh scripts/publish-release.sh "postgres/v${VERSION}" "postgres ${VERSION}" assets <<EOF
+          Prebuilt PostgreSQL \`${PG}\` with timescaledb \`${TS}\`, pgvector \`${VEC}\`, and VectorChord \`${VCHORD}\` for CI consumption.
+
+          - Upstream: https://ftp.postgresql.org/pub/source/v${PG}/ , https://github.com/timescale/timescaledb/releases/tag/${TS} , https://github.com/pgvector/pgvector/tree/v${VEC} , https://github.com/tensorchord/VectorChord/releases/tag/${VCHORD}
+          - Build: \`./configure --with-icu --with-openssl\` + \`contrib/pgcrypto\`; timescaledb bootstrap \`-DREGRESS_CHECKS=OFF -DWARNINGS_AS_ERRORS=OFF\`; VectorChord from the official \`postgresql-${PG%%.*}\` .deb.
+          - Smoke-tested: initdb + server boot + \`CREATE EXTENSION\` for timescaledb, vector, and vchord.
+          - Targets: linux-x64 (ubuntu-26.04 / gcc), linux-arm64 (ubuntu-26.04-arm / gcc). Links against the runner images' system OpenSSL/ICU/readline/zlib.
+          - Layout: the archive root is \`opt/postgresql\` — extract at \`/\` to install into \`/opt/postgresql\`. Starting clusters and setting \`shared_preload_libraries=timescaledb,vchord\` stay consumer-side.
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - Licenses: PostgreSQL License (postgres, pgvector); timescaledb is Apache-2.0 outside \`tsl/\` and Timescale License (TSL) within it — this build includes the TSL \`-tsl\` module; VectorChord is dual AGPL-3.0 / Elastic License v2
+          EOF
+
+  # ---------------------------------------------------------------- valkey
+  build-valkey:
+    needs: check
+    if: needs.check.outputs.valkey_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Build and pack valkey
+        env:
+          VALKEY_PLATFORM: ${{ matrix.platform }}
+          VALKEY_WORK: ${{ runner.temp }}/valkey-build
+        run: |
+          sh scripts/valkey-build.sh \
+            "${{ needs.check.outputs.valkey_server }}" \
+            "${{ needs.check.outputs.valkey_bloom }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: valkey-${{ matrix.platform }}
+          path: ${{ runner.temp }}/valkey-build/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-valkey:
+    needs: [check, build-valkey]
+    if: needs.check.outputs.valkey_build == 'true' && needs.build-valkey.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VALKEY: ${{ needs.check.outputs.valkey_server }}
+      BLOOM: ${{ needs.check.outputs.valkey_bloom }}
+      VERSION: ${{ needs.check.outputs.valkey_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: valkey-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          sh scripts/publish-release.sh "valkey/v${VERSION}" "valkey ${VERSION}" assets <<EOF
+          Prebuilt Valkey \`${VALKEY}\` (official noble build from download.valkey.io) with the valkey-bloom \`${BLOOM}\` module built from source, for CI consumption.
+
+          - Upstream: https://github.com/valkey-io/valkey/tree/v${VALKEY} , https://github.com/valkey-io/valkey-bloom/releases/tag/${BLOOM}
+          - Smoke-tested: server boots with \`--loadmodule libvalkey_bloom.so\` and the module registers.
+          - Targets: linux-x64 (x86_64 build), linux-arm64 (arm64 build).
+          - Layout: the archive root is \`opt/valkey\` — extract at \`/\` to install into \`/opt/valkey\`; the module sits at \`/opt/valkey/modules/libvalkey_bloom.so\`.
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - Licenses: BSD-3-Clause (valkey, valkey-bloom)
+          EOF
+
+  # ------------------------------------------------------------- clickhouse
+  build-clickhouse:
+    needs: check
+    if: needs.check.outputs.clickhouse_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Build and pack clickhouse
+        env:
+          CLICKHOUSE_PLATFORM: ${{ matrix.platform }}
+          CLICKHOUSE_WORK: ${{ runner.temp }}/clickhouse-build
+        run: sh scripts/clickhouse-build.sh "${{ needs.check.outputs.clickhouse_version }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: clickhouse-${{ matrix.platform }}
+          path: ${{ runner.temp }}/clickhouse-build/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-clickhouse:
+    needs: [check, build-clickhouse]
+    if: needs.check.outputs.clickhouse_build == 'true' && needs.build-clickhouse.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.check.outputs.clickhouse_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: clickhouse-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          sh scripts/publish-release.sh "clickhouse/v${VERSION}" "clickhouse ${VERSION}" assets <<EOF
+          Prebuilt ClickHouse \`${VERSION}\` LTS (official common-static + server tarballs) for CI consumption.
+
+          - Upstream: https://github.com/ClickHouse/ClickHouse/releases/tag/v${VERSION}-lts
+          - Smoke-tested: the multi-call binary runs and reports the expected version.
+          - Targets: linux-x64 (amd64 build), linux-arm64 (arm64 build).
+          - Layout: the archive root is \`opt/clickhouse\` — extract at \`/\` to install into \`/opt/clickhouse\`; binaries at \`/opt/clickhouse/usr/bin\`, server config template at \`/opt/clickhouse/etc/clickhouse-server\`.
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - License: Apache-2.0 (upstream)
+          EOF
+
+  # ----------------------------------------------------------------- pebble
+  build-pebble:
+    needs: check
+    if: needs.check.outputs.pebble_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Build and pack pebble
+        env:
+          PEBBLE_PLATFORM: ${{ matrix.platform }}
+          PEBBLE_WORK: ${{ runner.temp }}/pebble-build
+        run: sh scripts/pebble-build.sh "${{ needs.check.outputs.pebble_version }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pebble-${{ matrix.platform }}
+          path: ${{ runner.temp }}/pebble-build/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-pebble:
+    needs: [check, build-pebble]
+    if: needs.check.outputs.pebble_build == 'true' && needs.build-pebble.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.check.outputs.pebble_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: pebble-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          sh scripts/publish-release.sh "pebble/v${VERSION}" "pebble ${VERSION}" assets <<EOF
+          Prebuilt pebble \`${VERSION}\` (ACME test server) for CI consumption.
+
+          - Upstream: https://github.com/letsencrypt/pebble/releases/tag/v${VERSION}
+          - Smoke-tested: pebble + challtestsrv boot and serve the ACME directory on 127.0.0.1:14000.
+          - Targets: linux-x64 (amd64 build), linux-arm64 (arm64 build).
+          - Layout: the archive root is \`opt/pebble\` — extract at \`/\` to install into \`/opt/pebble\`; binaries in \`bin/\`, test config and certs in \`test/\`.
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - License: MPL-2.0 (upstream)
+          EOF
+
+  # -------------------------------------------------------------- typesense
+  build-typesense:
+    needs: check
+    if: needs.check.outputs.typesense_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Build and pack typesense
+        env:
+          TYPESENSE_PLATFORM: ${{ matrix.platform }}
+          TYPESENSE_WORK: ${{ runner.temp }}/typesense-build
+        run: sh scripts/typesense-build.sh "${{ needs.check.outputs.typesense_version }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: typesense-${{ matrix.platform }}
+          path: ${{ runner.temp }}/typesense-build/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-typesense:
+    needs: [check, build-typesense]
+    if: needs.check.outputs.typesense_build == 'true' && needs.build-typesense.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.check.outputs.typesense_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: typesense-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          sh scripts/publish-release.sh "typesense/v${VERSION}" "typesense ${VERSION}" assets <<EOF
+          Prebuilt Typesense \`${VERSION}\` (official typesense-server build) for CI consumption.
+
+          - Upstream: https://dl.typesense.org/releases/${VERSION}/ (GitHub tag: https://github.com/typesense/typesense/releases/tag/v${VERSION})
+          - Smoke-tested: server boots against a /dev/shm data dir and serves /health on 127.0.0.1:8108.
+          - Targets: linux-x64 (amd64 build), linux-arm64 (arm64 build).
+          - Layout: the archive root is \`opt/typesense\` — extract at \`/\` to install into \`/opt/typesense\`.
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - License: GPL-3.0 (upstream)
+          EOF
+
+  # ------------------------------------------------------------------- zstd
+  build-zstd:
+    needs: check
+    if: needs.check.outputs.zstd_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+          - platform: darwin-arm64
+            runs-on: macos-26
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Build and pack zstd
+        env:
+          ZSTD_PLATFORM: ${{ matrix.platform }}
+          ZSTD_WORK: ${{ runner.temp }}/zstd-build
+        run: sh scripts/zstd-build.sh "${{ needs.check.outputs.zstd_version }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zstd-${{ matrix.platform }}
+          path: ${{ runner.temp }}/zstd-build/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-zstd:
+    needs: [check, build-zstd]
+    if: needs.check.outputs.zstd_build == 'true' && needs.build-zstd.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.check.outputs.zstd_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: zstd-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          upstream_sha=$(head -n 1 assets/upstream-sha256.txt)
+          sh scripts/publish-release.sh "zstd/v${VERSION}" "zstd ${VERSION}" assets <<EOF
+          Prebuilt zstd \`${VERSION}\` libraries for CI consumption — avoids installing \`libzstd-dev\` with apt on every run.
+
+          - Upstream: https://github.com/facebook/zstd/releases/tag/v${VERSION}
+          - Upstream source sha256: \`${upstream_sha}\`
+          - Build: cmake Release, shared + static libs, programs included
+          - Targets: linux-x64 (ubuntu-26.04 / gcc), linux-arm64 (ubuntu-26.04-arm / gcc), darwin-arm64 (macos-26 / clang)
+          - Layout: the archive root is \`opt/zstd\` — extract at \`/\` to install into \`/opt/zstd\`, then run \`sudo ldconfig\` on Linux. macOS dylibs carry \`/opt/zstd/lib\` install names. Point builds at it via \`ZSTD_ROOT=/opt/zstd\`, \`-I/opt/zstd/include -L/opt/zstd/lib\`, or \`PKG_CONFIG_PATH=/opt/zstd/lib/pkgconfig\`.
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - Licenses: BSD-3-Clause (library), GPL-2.0 (the \`zstd\` CLI programs)
+          EOF
+
+  # ---------------------------------------------------------------- libgit2
+  build-libgit2:
+    needs: check
+    if: needs.check.outputs.libgit2_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Build and pack libgit2
+        env:
+          LIBGIT2_PLATFORM: ${{ matrix.platform }}
+          LIBGIT2_WORK: ${{ runner.temp }}/libgit2-build
+        run: |
+          sh scripts/libgit2-build.sh \
+            "${{ needs.check.outputs.libgit2_ver }}" \
+            "${{ needs.check.outputs.libgit2_ssh2 }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: libgit2-${{ matrix.platform }}
+          path: ${{ runner.temp }}/libgit2-build/out/
+          if-no-files-found: error
+          retention-days: 1
+
+  release-libgit2:
+    needs: [check, build-libgit2]
+    if: needs.check.outputs.libgit2_build == 'true' && needs.build-libgit2.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      LG: ${{ needs.check.outputs.libgit2_ver }}
+      SSH2: ${{ needs.check.outputs.libgit2_ssh2 }}
+      VERSION: ${{ needs.check.outputs.libgit2_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: libgit2-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          upstream_sha=$(head -n 1 assets/upstream-sha256.txt)
+          sh scripts/publish-release.sh "libgit2/v${VERSION}" "libgit2 ${VERSION}" assets <<EOF
+          Prebuilt libgit2 \`${LG}\` with bundled libssh2 \`${SSH2}\` for CI consumption — avoids installing \`libgit2-dev\` with apt on every run.
+
+          - Upstream: https://github.com/libgit2/libgit2/releases/tag/v${LG} , https://github.com/libssh2/libssh2/releases/tag/libssh2-${SSH2}
+          - Upstream source sha256: \`${upstream_sha}\` (libgit2)
+          - Build: cmake Release, shared libs, tests off, \`USE_SSH=libssh2\` with **libssh2 \`${SSH2}\` bundled into the prefix** and HTTPS via the system OpenSSL — matches ubuntu \`libgit2-dev\` functionality, no extra apt deps for consumers
+          - Targets: linux-x64 (ubuntu-26.04 / gcc), linux-arm64 (ubuntu-26.04-arm / gcc)
+          - Layout: the archive root is \`opt/libgit2\` — extract at \`/\` to install into \`/opt/libgit2\`, then run \`sudo ldconfig\` on Linux. Point builds at it via \`GIT2_ROOT=/opt/libgit2\`, \`-I/opt/libgit2/include -L/opt/libgit2/lib\`, or \`PKG_CONFIG_PATH=/opt/libgit2/lib/pkgconfig\`.
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - Licenses: GPL-2.0 with a linking exception (libgit2), BSD-3-Clause (bundled libssh2)
+          EOF
+
+  # ---------------------------------------------------------------- cleanup
+  cleanup:
+    needs:
+      [
+        release-aws-lc,
+        release-bun,
+        release-zlib-ng,
+        release-postgres,
+        release-valkey,
+        release-clickhouse,
+        release-pebble,
+        release-typesense,
+        release-zstd,
+        release-libgit2,
+      ]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KEEP_RELEASES: "15"
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Prune old releases
+        run: sh scripts/prune-releases.sh
