@@ -1,0 +1,6 @@
+self-hosted-runner:
+  # ubuntu-26.04 / -arm are live GitHub-hosted labels but not yet in
+  # actionlint's bundled runner-images database.
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm
