@@ -51,8 +51,14 @@ src="$work/aws-lc-${version}"
 
 # Release build, shared libs; pin macOS dylib install names to /opt/aws-lc/lib.
 case "$os" in
-macos) extra_cmake="-DCMAKE_INSTALL_NAME_DIR=/opt/aws-lc/lib" ;;
-*) extra_cmake="" ;;
+macos)
+	extra_cmake="-DCMAKE_INSTALL_NAME_DIR=/opt/aws-lc/lib"
+	smoke_ldflags="-Wl,-headerpad_max_install_names"
+	;;
+*)
+	extra_cmake=""
+	smoke_ldflags=""
+	;;
 esac
 # shellcheck disable=SC2086
 cmake -S "$src" -B "$work/build" -G Ninja \
@@ -88,7 +94,8 @@ int main(void) {
 	return 0;
 }
 EOF
-${CC:-cc} -O2 -I"$prefix/include" "$work/smoke.c" \
+# shellcheck disable=SC2086
+${CC:-cc} -O2 -I"$prefix/include" "$work/smoke.c" $smoke_ldflags \
 	-L"$prefix/lib" -lssl -lcrypto -Wl,-rpath,"$prefix/lib" \
 	-o "$work/smoke"
 if [ "$os" = macos ]; then
