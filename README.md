@@ -21,6 +21,8 @@ per product are kept.
 | typesense | [typesense](https://github.com/typesense/typesense) | linux-x64, linux-arm64 | `/opt/typesense` |
 | zstd | [facebook/zstd](https://github.com/facebook/zstd) | linux-x64, linux-arm64, darwin-arm64 | `/opt/zstd` |
 | libgit2 | [libgit2](https://github.com/libgit2/libgit2) + [libssh2](https://github.com/libssh2/libssh2) | linux-x64, linux-arm64 | `/opt/libgit2` |
+| sqlite-vec | [asg017/sqlite-vec](https://github.com/asg017/sqlite-vec) | linux-x64, linux-arm64, darwin-arm64 | `/opt/sqlite-vec` |
+| llama-embedding | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `bNNNN` builds + [embeddinggemma-300M-GGUF](https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF) | linux-x64, linux-arm64, darwin-arm64 | `/opt/llama-embedding` |
 
 Version tracking:
 
@@ -30,15 +32,41 @@ Version tracking:
 - valkey and pgvector publish no binary GitHub releases, so their git tags are
   tracked; clickhouse tracks LTS tags.
 
+## OCI image mirrors
+
+`oci-<name>/v<version>` releases repack upstream platform images as **zstd:chunked**
+OCI image layouts (`skopeo copy --all --dest-compress-format zstd:chunked
+--dest-compress-level 19`), one `<product>-<version>-oci.tar.zst` asset per
+image covering every published architecture. The tracked set lives in
+[`oci-images.txt`](scripts/oci-images.txt). Tags follow each upstream project's
+latest GitHub release and are checked against the registry before building.
+
+```sh
+curl -fsSL --retry 3 -O "https://github.com/teamoffy/tmfy-ci-releases/releases/download/oci-cilium/v1.20.2/oci-cilium-1.20.2-oci.tar.zst"
+tar --zstd -xf oci-cilium-1.20.2-oci.tar.zst
+skopeo copy --all --preserve-digests oci:oci-cilium-1.20.2:v1.20.2 docker://<registry>/<repo>:v1.20.2
+```
+
+`--preserve-digests` keeps the zstd:chunked metadata. A containers/storage
+client, such as Podman or CRI-O, can then use range requests and reuse existing
+chunks when partial pulls are enabled. This is not the eStargz format used by
+stargz-snapshotter. The destination registry must accept OCI manifests with
+zstd layers; preserving digests prevents transparent recompression. The
+extracted directory also works with OCI-layout consumers directly, including
+an S3 registry sync or `skopeo copy oci:... oci-archive:...` for
+`ctr images import`.
+
 ## Assets
 
-Release tags are `<product>/v<version>`; assets are
-`<product>-<version>-<platform>.tar.zst` (`tar | zstd --ultra -22`). Every
-release ships `SHA256SUMS.txt`, and every built archive embeds `BUILD-INFO.txt`
-with the upstream URLs, checksums, and build recipe. The bun archives are the
-exception: they preserve the upstream contents and layout, so they carry no
-`BUILD-INFO.txt`. `zstd` is preinstalled on `ubuntu-24.04+` and `macos-15+`
-runners, so `tar --zstd -xf` works out of the box.
+Release tags are `<product>/v<version>`. Native-product assets are named
+`<product>-<version>-<platform>.tar.zst` and use `tar | zstd --ultra -22`; OCI
+asset names and layouts are described above. Every release ships
+`SHA256SUMS.txt`. Product archives embed `BUILD-INFO.txt` with upstream URLs,
+checksums, and the build recipe. Bun preserves the upstream archive layout, and
+OCI assets are self-contained image layouts, so neither carries
+`BUILD-INFO.txt`; their provenance is recorded in the release notes. `zstd` is
+preinstalled on `ubuntu-24.04+` and `macos-15+` runners, so
+`tar --zstd -xf` works out of the box.
 
 ## Usage
 
@@ -75,6 +103,21 @@ Product notes:
   `install bun-<platform>/bun ~/.bun/bin/bun`. Inside Actions, pinning a version
   in `oven-sh/setup-bun` is usually simpler, since its cache only engages for
   pinned versions; this mirror is for cold starts and non-Actions use.
+- **sqlite-vec**: repack of upstream's loadable `vec0` extension at
+  `opt/sqlite-vec/lib/vec0.so` (`vec0.dylib` on macOS). Verified against
+  upstream `checksums.txt` and smoke-tested by loading the extension
+  (`vec_version()`); consumers load it by absolute path, e.g.
+  `sqlite3_load_extension` or a `*_SQLITE_VEC_EXTENSION`-style env var.
+- **llama-embedding**: llama.cpp's official per-platform binary tarball plus
+  the pinned EmbeddingGemma GGUF — the codetel semantic-search test fixture.
+  `opt/llama-embedding/native/` holds the libraries and CLI tools;
+  `opt/llama-embedding/models/` holds `embeddinggemma-300M-Q8_0.gguf`. The
+  version is llama.cpp's `bNNNN` tag verbatim (`llama-embedding/vb11056`) —
+  upstream marks those builds prerelease, so the newest `b*` tag carrying all
+  three bin tarballs is tracked rather than `releases/latest`. The
+  model is revision-pinned in the repack script and bumps via a forced rebuild.
+  The archive includes the Gemma terms, prohibited-use policy, required notice,
+  and modification notice. Smoke-tested by running `llama-cli --version`.
 
 ## Resolving the latest asset URL
 
@@ -88,8 +131,8 @@ gh api --paginate repos/teamoffy/tmfy-ci-releases/releases --jq \
 ```
 
 Releases come back newest first, so `head -n 1` wins. Paginating matters: with
-ten products in one repo, a product that has not shipped in a while can fall off
-the first page.
+this many product lines in one repo, a product that has not shipped in a while
+can fall off the first page.
 
 ## Development
 

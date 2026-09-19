@@ -3,16 +3,18 @@
 ## Pipeline
 
 One workflow ([`release.yml`](.github/workflows/release.yml)), one daily run
-(06:17 UTC), 22 jobs:
+(06:17 UTC), 28 jobs:
 
 1. **check** — resolves every product's target version from upstream (GitHub
    releases where they exist, git tags or index listings where they don't) and
-   decides whether that version is already released here.
+   decides whether that version is already released here. For the `oci-*`
+   image mirrors it also probes each resolved tag on its registry and emits a
+   dynamic build matrix of what's missing.
 2. **build-\<product\>** — one parallel job per product with its own platform
    matrix. `fail-fast: false` lets the other targets finish if one target fails.
    Every product is smoke-tested before publishing: compiled-and-run for the
    libraries, a live server boot for the services, checksum-verified repacks
-   for the mirrors.
+   for the mirrors, layer-format verification for the OCI repacks.
 3. **release-\<product\>** — assembles `SHA256SUMS.txt` and publishes the
    release with notes (upstream URLs/checksums, build recipe, license).
 4. **cleanup** — prunes each product's releases beyond the newest
@@ -26,10 +28,14 @@ replaces its release assets and notes in place, while the rest get their normal
 daily check.
 `version` is optional (upstream latest if empty); multi-component products
 take slash-joined versions: postgres `18.6/2.29.2/0.8.6/1.1.1`, valkey
-`9.1.2/1.0.1`, libgit2 `1.9.7/1.11.1`. From the Actions tab, or:
+`9.1.2/1.0.1`, libgit2 `1.9.7/1.11.1`. `oci-mirror` takes `<name>:<tag>` from
+[`oci-images.txt`](scripts/oci-images.txt) (e.g. `cilium:v1.20.1`) — an empty
+version force-rebuilds the whole image list at latest. From the Actions tab,
+or:
 
 ```sh
 gh workflow run release.yml -f product=zstd -f version=1.5.7
+gh workflow run release.yml -f product=oci-mirror -f version=cilium:v1.20.1
 ```
 
 PostgreSQL is pinned to 18.x — major bumps need a new VectorChord `.deb`
@@ -39,10 +45,21 @@ target, so bump them deliberately via a forced version.
 
 - `check.sh` — version resolution for all products. Reads `FORCE_PRODUCT` /
   `FORCE_VERSION`, writes `<product>_version` / `<product>_build` lines to
-  `GITHUB_OUTPUT`.
-- `<product>-build.sh <version>...` — build, smoke-test, and pack one product
-  (bun is the odd one out: `bun-repack.sh`, since it only mirrors). Multi-component
-  products take one arg per component (postgres 4, valkey 2, libgit2 2). Each
+  `GITHUB_OUTPUT` (plus `oci_matrix`/`oci_build` for the image mirrors).
+- `oci-images.txt` — tracked image mirrors: `<name> <registry/repo> <gh repo>
+  <sed>`, one per line. `<gh repo>`'s latest release tag, transformed by
+  `<sed>`, is the image tag to mirror.
+- `oci-mirror.sh <name> <repo:tag>` — `skopeo copy --all` re-encode of one
+  upstream image to a zstd:chunked OCI layout, layer-format verification, then
+  `pack.sh` to a `-oci.tar.zst` asset plus a `release-info.env` provenance
+  file. Takes an `OCI_WORK` work dir.
+- `<product>-build.sh <version>...` — build, smoke-test, and pack one product.
+  The mirrors use `*-repack.sh` instead (`bun-repack.sh`, `sqlite-vec-repack.sh`,
+  `llama-embedding-repack.sh`): they verify upstream checksums where published
+  and re-archive rather than compile. sqlite-vec and llama-embedding repack on
+  each target's native runner so their smoke tests (loading `vec0`, running
+  `llama-cli`) exercise the packaged binaries. Multi-component products take
+  one arg per component (postgres 4, valkey 2, libgit2 2). Each
   takes a `*_PLATFORM` env (e.g. `linux-x64`) and a `*_WORK` work dir.
 - `pack.sh <dir> <out.tar.zst> <entry>` — max-compressed tar.zst + sha256
   sidecar.
@@ -65,7 +82,9 @@ What runs where:
 
 - **Published macOS targets** — aws-lc, zlib-ng, and zstd build natively on
   macOS with their smoke tests included. Bun repacks and verifies upstream's
-  Linux and macOS zips on the Linux runner.
+  Linux and macOS zips on the Linux runner; sqlite-vec and llama-embedding
+  repack upstream's binaries on each platform's native runner so their smoke
+  tests load `vec0` and run `llama-cli`.
 - **Published Linux-only targets** — postgres, valkey, clickhouse, pebble,
   typesense, and libgit2. The first five reject non-Linux hosts. The libgit2
   script also has a macOS build path for local testing, but the release workflow

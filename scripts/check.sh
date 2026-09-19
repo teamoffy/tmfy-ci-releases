@@ -9,6 +9,9 @@
 #                   postgres: pg/ts/vec/vchord  e.g. 18.6/2.29.2/0.8.6/1.1.1
 #                   valkey:   server/bloom     e.g. 9.1.2/1.0.1
 #                   libgit2:  libgit2/libssh2  e.g. 1.9.7/1.11.1
+#                   llama-embedding: bNNNN     e.g. b10819
+#                   oci-mirror: <name>:<tag>   e.g. cilium:v1.20.1
+#                   (empty rebuilds every image in oci-images.txt at latest)
 #   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT
 set -eu
 repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}"
@@ -16,10 +19,35 @@ out="${GITHUB_OUTPUT:?GITHUB_OUTPUT must be set}"
 force_product="${FORCE_PRODUCT:-}"
 force_version="${FORCE_VERSION:-}"
 
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=/dev/null
+. "$script_dir/lib.sh"
+
 case "$force_product" in
-"" | aws-lc | bun | zlib-ng | postgres | valkey | clickhouse | pebble | typesense | zstd | libgit2) ;;
+"" | aws-lc | bun | zlib-ng | postgres | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | oci-mirror) ;;
 *) echo "check.sh: unknown product '$force_product'" >&2; exit 1 ;;
 esac
+
+force_oci_name=
+force_oci_tag=
+if [ "$force_product" = oci-mirror ] && [ -n "$force_version" ]; then
+	case "$force_version" in
+	*:*) ;;
+	*)
+		echo "check.sh: forced oci-mirror version must be <name>:<tag> (e.g. cilium:v1.20.1)" >&2
+		exit 1 ;;
+	esac
+	force_oci_name="${force_version%%:*}"
+	force_oci_tag="${force_version#*:}"
+	case "$force_oci_name" in '' | *[!a-z0-9-]*)
+		echo "check.sh: invalid oci-mirror name in '$force_version'" >&2
+		exit 1 ;;
+	esac
+	case "$force_oci_tag" in '' | [.-]* | *[!a-zA-Z0-9_.-]*)
+		echo "check.sh: forced oci-mirror version must be <name>:<tag> (e.g. cilium:v1.20.1)" >&2
+		exit 1 ;;
+	esac
+fi
 
 latest_gh() { # <owner/repo> <sed expr>
 	gh api "repos/$1/releases/latest" --jq '.tag_name' | sed "$2"
@@ -160,3 +188,86 @@ fi
 }
 printf 'libgit2_ver=%s\nlibgit2_ssh2=%s\n' "$lg" "$ssh2" >>"$out"
 decide libgit2 "${lg}-libssh2-${ssh2}"
+
+# ---------------------------------------------------------------- sqlite-vec
+# Upstream publishes loadable-extension tarballs; the repack only mirrors them.
+decide sqlite-vec "$(force_or sqlite-vec "$(latest_gh asg017/sqlite-vec 's/^v//')")"
+
+# ------------------------------------------------------------- llama-embedding
+# The version is a bNNNN tag, verbatim (tag llama-embedding/vbNNNN). Upstream
+# marks every b-build a prerelease, so releases/latest resolves to a semver
+# tag that ships no bin assets — take the newest b* release carrying all three
+# bin tarballs instead.
+if [ "$force_product" = llama-embedding ] && [ -n "$force_version" ]; then
+	llama_v=$force_version
+else
+	llama_v=$(gh api "repos/ggml-org/llama.cpp/releases?per_page=30" --jq '
+		[.[] | select(.tag_name | startswith("b"))
+		 | select([.assets[].name | select(test("-bin-(ubuntu-x64|ubuntu-arm64|macos-arm64)\\.tar\\.gz$"))]
+			| unique | length == 3)
+		 | .tag_name][0]')
+fi
+case "$llama_v" in b*) ;; *) llama_v="b$llama_v" ;; esac
+decide llama-embedding "$llama_v"
+
+# --------------------------------------------------------------- oci mirrors
+# zstd:chunked repacks of upstream platform images. scripts/oci-images.txt
+# lists "<name> <registry/repo> <gh repo> <sed>": "latest" is the upstream
+# GitHub latest release tag transformed by <sed> ("-" or empty = no transform).
+# Registry tag listings are unordered and paginated (ghcr caps tags/list at
+# 100 per page), so they can't resolve latest — the GH release is the source
+# of truth, and the tag is then probed on the registry. A fresh upstream
+# release whose image is not pushed yet is skipped until the next run.
+# Output is a build matrix (all arches are handled in one skopeo copy).
+oci_file="$script_dir/oci-images.txt"
+oci_matrix=
+oci_names=
+oci_build=false
+oci_matched_force=false
+while read -r oci_name oci_repo oci_gh oci_sed || [ -n "$oci_name" ]; do
+	case "$oci_name" in '' | '#'*) continue ;; esac
+	case " $oci_names " in
+	*" $oci_name "*)
+		echo "check.sh: duplicate name in oci-images.txt: $oci_name" >&2
+		exit 1 ;;
+	esac
+	oci_names="$oci_names $oci_name"
+	[ -n "$oci_repo" ] && [ -n "$oci_gh" ] || {
+		echo "check.sh: bad oci-images.txt line: '$oci_name $oci_repo $oci_gh $oci_sed'" >&2
+		exit 1
+	}
+	forced=false
+	if [ "$oci_name" = "$force_oci_name" ]; then
+		oci_tag=$force_oci_tag
+		forced=true
+		oci_matched_force=true
+	else
+		case "$oci_sed" in '' | -) oci_sed='s/$//' ;; esac
+		oci_tag=$(latest_gh "$oci_gh" "$oci_sed")
+		[ "$force_product" = oci-mirror ] && [ -z "$force_oci_name" ] && forced=true
+	fi
+	oci_ver="${oci_tag#v}"
+	if [ "$forced" = true ] ||
+		! printf '%s\n' "$existing_tags" | grep -qxF "oci-$oci_name/v$oci_ver"; then
+		ensure_cmds skopeo
+		if skopeo inspect --raw "docker://$oci_repo:$oci_tag" >/dev/null 2>&1; then
+			entry=$(printf '{"name":"%s","ref":"%s","version":"%s"}' \
+				"$oci_name" "$oci_repo:$oci_tag" "$oci_ver")
+			oci_matrix="${oci_matrix:+$oci_matrix,}$entry"
+			oci_build=true
+			echo "oci-$oci_name: $oci_repo:$oci_tag build=true"
+		elif [ "$forced" = true ]; then
+			echo "check.sh: image not on registry: $oci_repo:$oci_tag" >&2
+			exit 1
+		else
+			echo "oci-$oci_name: $oci_repo:$oci_tag not on registry yet — skipping"
+		fi
+	else
+		echo "oci-$oci_name: oci-$oci_name/v$oci_ver build=false"
+	fi
+done <"$oci_file"
+if [ -n "$force_oci_name" ] && [ "$oci_matched_force" = false ]; then
+	echo "check.sh: '$force_oci_name' is not in oci-images.txt" >&2
+	exit 1
+fi
+printf 'oci_build=%s\noci_matrix={"include":[%s]}\n' "$oci_build" "$oci_matrix" >>"$out"

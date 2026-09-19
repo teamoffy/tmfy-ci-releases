@@ -1,0 +1,24 @@
+# OCI image mirrors — one line per tracked image:
+#   <name> <registry/repo> <gh-owner/repo> <sed>
+#
+# <name>            product suffix; releases are tagged oci-<name>/v<version>
+# <registry/repo>   image repository to pull (public, anonymous)
+# <gh-owner/repo>   GitHub repo whose latest release tag is the image's version
+# <sed>             expression applied to the release tag to get the image tag,
+#                   "-" for none (e.g. k3s releases are v1.x.y+k3sN but the
+#                   docker tag is v1.x.y-k3sN)
+#
+# "Latest" is the upstream GitHub latest release — registry tag listings are
+# unordered and paginated (ghcr caps /tags/list at 100 per page), so they
+# cannot resolve latest. If a release tag has not been pushed to the registry
+# yet, the image is skipped and picked up by the next run.
+#
+# This is the per-node DaemonSet set (that's where cross-node pull cost lives).
+cilium                    quay.io/cilium/cilium                                     cilium/cilium                                     -
+tetragon                  quay.io/cilium/tetragon                                   cilium/tetragon                                   -
+k3s-upgrade               docker.io/rancher/k3s-upgrade                             k3s-io/k3s                                        s/+/-/
+kured                     ghcr.io/kubereboot/kured                                  kubereboot/kured                                  -
+upcloud-csi               ghcr.io/upcloudltd/upcloud-csi                            UpCloudLtd/upcloud-csi                            -
+local-volume-provisioner  registry.k8s.io/sig-storage/local-volume-provisioner      kubernetes-sigs/sig-storage-local-static-provisioner  s/^local-static-provisioner-/v/
+csi-node-driver-registrar registry.k8s.io/sig-storage/csi-node-driver-registrar     kubernetes-csi/node-driver-registrar              -
+livenessprobe             registry.k8s.io/sig-storage/livenessprobe                 kubernetes-csi/livenessprobe                      -
