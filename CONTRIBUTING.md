@@ -63,10 +63,12 @@ target, so bump them deliberately via a forced version.
   <gh repo|pin:tag> <sed>`, one per line. `<gh repo>`'s latest release tag,
   transformed by `<sed>`, is the image tag to mirror; `pin:<tag>` is a literal
   tag for chart-pinned images. The check fails if a pinned tag is unavailable.
-- `oci-mirror.sh <name> <repo:tag>` — `skopeo copy --all` re-encode of one
-  upstream image to a zstd:chunked OCI layout, layer-format verification, then
-  `pack.sh` at level 12 (the blobs are already compressed) to a `-oci.tar.zst`
-  asset plus a `release-info.env` provenance file. Takes an `OCI_WORK` work dir.
+- `oci-mirror.sh <name> <repo:tag>` — `skopeo copy` re-encode of one upstream
+  image's linux platforms to a zstd:chunked OCI layout (windows/darwin index
+  entries are dropped — multi-GB layers no tea node can pull), layer-format
+  verification, then `pack.sh` at level 12 (the blobs are already compressed)
+  to a `-oci.tar.zst` asset plus a `release-info.env` provenance file.
+  Takes an `OCI_WORK` work dir.
 - `k3s-mirror.sh <version>` — verbatim mirror of the k3s node binaries, zstd
   airgap tarballs, `k3s-images.txt`, and `install.sh`; binaries/airgap are
   verified against upstream `sha256sum-<arch>.txt` and everything else against

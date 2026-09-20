@@ -1,10 +1,12 @@
 #!/bin/sh
 # Mirror one upstream image as a zstd:chunked OCI image layout, packed into a
-# tar.zst release asset. --all keeps every published arch; every layer is
+# tar.zst release asset. Only linux platforms are kept — windows variants carry
+# multi-GB base layers no tea node can pull (gcp-pd-csi-driver: 4.4 GB total,
+# 0.26 GB of it linux) and blow GitHub's 2 GiB asset cap. Every layer is
 # re-encoded to zstd:chunked, which lets containers/storage clients use range
 # requests and reuse chunks during partial pulls. Writes release-info.env
 # (provenance for the notes) next to the asset.
-# usage: oci-mirror.sh <name> <registry/repo:tag>
+# usage: oci-mirror.sh <name> <repo:tag>
 # env:
 #   OCI_WORK   work dir (default .oci-mirror-work)
 set -eu
@@ -40,6 +42,23 @@ raw="$work/upstream-manifest.json"
 skopeo inspect --raw "docker://$ref" >"$raw"
 upstream_digest=$(sha256_of "$raw")
 
+# Keep every linux/* platform the index ships, drop everything else (windows,
+# darwin, attestations). Single-manifest images carry no platform list and
+# copy as-is; an index with zero linux platforms is a bug worth failing on.
+platforms=$(jq -r '[.manifests[]? | select(.platform.os == "linux") |
+	"linux/" + .platform.architecture] | unique | join(",")' "$raw")
+if [ -n "$platforms" ]; then
+	# --strip-removed-platforms rewrites the inner index to only the copied
+	# platforms — without it the index keeps dangling refs to windows
+	# manifests that were never copied.
+	set -- --multi-arch "$platforms" --strip-removed-platforms --remove-signatures
+elif jq -e 'has("manifests")' "$raw" >/dev/null; then
+	echo "oci-mirror.sh: $ref: image index has no linux platforms" >&2
+	exit 1
+else
+	set -- --all
+fi
+
 # Re-encode to zstd:chunked inside an OCI layout. --dest-force-compress-format
 # recompresses even already-zstd layers, so every layer carries the chunked
 # TOC annotations.
@@ -48,7 +67,7 @@ layout="$work/stage/$entry"
 attempt=1
 while :; do
 	rm -rf "$layout"
-	if skopeo copy --all --dest-compress-format zstd:chunked --dest-compress-level 19 \
+	if skopeo copy "$@" --dest-compress-format zstd:chunked --dest-compress-level 19 \
 		--dest-force-compress-format "docker://$ref" "oci:$layout:$tag"; then
 		break
 	fi
