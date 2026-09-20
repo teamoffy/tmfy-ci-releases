@@ -431,12 +431,58 @@ k3s_build=false
 [ -n "$k3s_matrix" ] && k3s_build=true
 printf 'k3s_build=%s\nk3s_matrix={"include":[%s]}\n' "$k3s_build" "$k3s_matrix" >>"$out"
 
-# shellcheck disable=SC2086 # $k3s_system_candidates is a word list
-k3s_system_matrix=$(ver_matrix k3s-system "$k3s_system_forced_v" $k3s_system_candidates)
+# One matrix cell per (version, image): the image set comes from each built
+# version's own k3s-images.txt — verified against its GitHub asset digest —
+# minus the components tea disables: traefik, metrics-server, klipper-lb.
+# build-k3s-system runs one cell per image; release-k3s-system uses the
+# version-only matrix to merge a version's cells into one release.
+k3s_system_matrix=
+k3s_system_images_matrix=
 k3s_system_build=false
-[ -n "$k3s_system_matrix" ] && k3s_system_build=true
+k3s_images_work=$(mktemp -d "${TMPDIR:-/tmp}/k3s-images.XXXXXX")
+# shellcheck disable=SC2086 # $k3s_system_candidates is a word list, split intended
+for ks_v in $k3s_system_candidates; do
+	if [ "$ks_v" != "$k3s_system_forced_v" ] &&
+		printf '%s\n' "$existing_tags" | grep -qxF "k3s-system/v$ks_v"; then
+		echo "k3s-system: v$ks_v build=false"
+		continue
+	fi
+	ks_digest=$(gh api "repos/k3s-io/k3s/releases/tags/v$ks_v" \
+		--jq '.assets[] | select(.name == "k3s-images.txt") | .digest // empty' |
+		sed 's/^sha256://')
+	[ -n "$ks_digest" ] || {
+		echo "check.sh: no GitHub asset digest for k3s-images.txt at v$ks_v" >&2
+		exit 1
+	}
+	ks_file="$k3s_images_work/$ks_v.txt"
+	fetch "https://github.com/k3s-io/k3s/releases/download/v$ks_v/k3s-images.txt" \
+		"$ks_file" "$ks_digest"
+	# grep exits 1 when the filter drops every line; keep set -e from turning
+	# that into a silent exit so the empty-set diagnostic below can run.
+	ks_images=$(grep -vE 'traefik|metrics-server|klipper-lb' "$ks_file") || true
+	[ -n "$ks_images" ] || {
+		echo "check.sh: k3s-images.txt at v$ks_v produced an empty image set" >&2
+		exit 1
+	}
+	k3s_system_build=true
+	k3s_system_matrix="${k3s_system_matrix:+$k3s_system_matrix,}{\"version\":\"$ks_v\"}"
+	echo "k3s-system: v$ks_v build=true"
+	while IFS= read -r ks_ref; do
+		[ -n "$ks_ref" ] || continue
+		ks_name=${ks_ref%:*}
+		ks_name=${ks_name##*/}
+		k3s_system_images_matrix="${k3s_system_images_matrix:+$k3s_system_images_matrix,}$(printf \
+			'{"version":"%s","name":"%s","ref":"%s"}' \
+			"$ks_v" "$ks_name" "$ks_ref")"
+	done <<-KS_IMAGES
+		$ks_images
+	KS_IMAGES
+done
+rm -rf "$k3s_images_work"
 printf 'k3s_system_build=%s\nk3s_system_matrix={"include":[%s]}\n' \
 	"$k3s_system_build" "$k3s_system_matrix" >>"$out"
+printf 'k3s_system_images_matrix={"include":[%s]}\n' \
+	"$k3s_system_images_matrix" >>"$out"
 
 # ------------------------------------------------------------------ flatcar
 # Public release artifacts under <channel>.release.flatcar-linux.net, mirrored

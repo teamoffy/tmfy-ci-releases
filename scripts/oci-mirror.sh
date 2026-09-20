@@ -95,8 +95,11 @@ esac
 # index may not have (e.g. running this on macOS).
 skopeo inspect --raw "oci:$layout:$tag" >/dev/null
 
+# The layout's blobs are already zstd:chunked (verified above), so the outer
+# archive compresses nothing meaningful — level 12 repacks multi-GB layouts in
+# seconds where 22 took ~20 min, at identical asset size.
 asset="$out/oci-$name-$version-oci.tar.zst"
-sh "$script_dir/pack.sh" "$work/stage" "$asset" "$entry"
+sh "$script_dir/pack.sh" "$work/stage" "$asset" "$entry" 12
 size=$(wc -c <"$asset" | tr -d ' ')
 [ "$size" -lt 2000000000 ] || {
 	echo "oci-mirror.sh: $asset is ${size}B — over GitHub's 2 GiB asset cap" >&2

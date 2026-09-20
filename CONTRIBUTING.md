@@ -57,34 +57,36 @@ target, so bump them deliberately via a forced version.
 - `check.sh` — version resolution for all products. Reads `FORCE_PRODUCT` /
   `FORCE_VERSION` and writes versions and build decisions to `GITHUB_OUTPUT`.
   Products that can build several releases in one run (`oci-*`, `k3s`,
-  `k3s-system`, and ci-tools) use JSON matrices.
+  `k3s-system`, and ci-tools) use JSON matrices; `k3s-system` additionally
+  emits a `(version, image)` cell matrix for its per-image build fan-out.
 - `oci-images.txt` — tracked image mirrors: `<name> <registry/repo>
   <gh repo|pin:tag> <sed>`, one per line. `<gh repo>`'s latest release tag,
   transformed by `<sed>`, is the image tag to mirror; `pin:<tag>` is a literal
   tag for chart-pinned images. The check fails if a pinned tag is unavailable.
 - `oci-mirror.sh <name> <repo:tag>` — `skopeo copy --all` re-encode of one
   upstream image to a zstd:chunked OCI layout, layer-format verification, then
-  `pack.sh` to a `-oci.tar.zst` asset plus a `release-info.env` provenance
-  file. Takes an `OCI_WORK` work dir.
+  `pack.sh` at level 12 (the blobs are already compressed) to a `-oci.tar.zst`
+  asset plus a `release-info.env` provenance file. Takes an `OCI_WORK` work dir.
 - `k3s-mirror.sh <version>` — verbatim mirror of the k3s node binaries, zstd
   airgap tarballs, `k3s-images.txt`, and `install.sh`; binaries/airgap are
   verified against upstream `sha256sum-<arch>.txt` and everything else against
   GitHub asset digests. Takes `K3S_WORK` and `GH_TOKEN`.
-- `k3s-system-mirror.sh <version>` — mirrors the system images the k3s
-  release's own `k3s-images.txt` lists (minus the components tea disables),
-  via `oci-mirror.sh` per image, into one `k3s-system/v<version>` release.
-  Takes `K3S_SYSTEM_WORK` and `GH_TOKEN`.
+- k3s-system images — `check.sh` resolves each built k3s version's image list
+  from its own `k3s-images.txt` (minus the components tea disables) into the
+  `k3s_system_images_matrix`; `build-k3s-system` runs `oci-mirror.sh` per
+  (version, image) cell and `release-k3s-system` merges a version's cells
+  into one `k3s-system/v<version>` release.
 - `stacks.txt` — per-cloud deployed node sets: `<stack> <product> <tag>` per
   line. Clouds track k8s versions independently. `check.sh` probes every row
   and queues the stack only if each release already exists or its upstream tag
   is available. A `k3s` row covers `k3s`, `k3s-system`, and
   `oci-k3s-upgrade`; `oci-*` rows add cells to the image build matrix. Update
   all related rows in one PR when bumping a cloud.
-- `flatcar-mirror.sh <version>` — verbatim mirror of the openstack/GCE/
-  developer-container artifacts, verified against the upstream `.DIGESTS`
-  sha512 sidecars. All kinds for `amd64`; `arm64` skips GCE (upstream ships
-  no arm64 GCE image). Takes `FLATCAR_WORK`, `FLATCAR_CHANNEL` (default
-  `stable`), `FLATCAR_ARCHES`.
+- `flatcar-mirror.sh <version> <arch> <upstream-file> <kind>` — verbatim
+  mirror of one release artifact, verified against the upstream `.DIGESTS`
+  sha512 sidecar. The artifact set is the `build-flatcar` matrix in
+  `release.yml` (GCE is amd64-only: upstream ships no arm64 GCE image).
+  Takes `FLATCAR_WORK`, `FLATCAR_CHANNEL` (default `stable`).
 - `flatcar-zfs-sysext-build.sh <flatcar> <zfs>` — OpenZFS compiled against the
   target Flatcar kernel inside that release's developer container
   (`systemd-nspawn`), packed as a squashfs `.raw` sysext with the
@@ -106,8 +108,9 @@ target, so bump them deliberately via a forced version.
   `llama-cli`) exercise the packaged binaries. Multi-component products take
   one arg per component (postgres 4, valkey 2, libgit2 2). Each
   takes a `*_PLATFORM` env (e.g. `linux-x64`) and a `*_WORK` work dir.
-- `pack.sh <dir> <out.tar.zst> <entry>` — max-compressed tar.zst + sha256
-  sidecar.
+- `pack.sh <dir> <out.tar.zst> <entry> [zstd-level]` — tar.zst + sha256
+  sidecar; level defaults to 22 (max), already-compressed payloads pass a
+  low level.
 - `publish-release.sh <tag> <title> <assets-dir>` — SHA256SUMS + release
   publish (notes on stdin). Every regular file in the assets dir ships, so
   mirrors can publish upstream artifacts verbatim; sidecars (`upstream-*`,
