@@ -36,7 +36,8 @@ take slash-joined versions: postgres `18.6/2.29.2/0.8.6/1.1.1`, valkey
 `oci-mirror` takes `<name>:<tag>` from
 [`oci-images.txt`](scripts/oci-images.txt) (e.g. `cilium:v1.20.1`), or force a
 single image directly with `product=oci-<name>` + `version=<tag>`; an empty
-version rebuilds the whole image list at latest. `ci-tools` works the same
+version rebuilds every image — stack-governed rows at the tags their stacks
+declare, pins at their pinned tag. `ci-tools` works the same
 way over [`ci-tools.txt`](scripts/ci-tools.txt) — `product=ci-tools` +
 `version=<name>:<tag>` or `product=<tool name>` + `version=<tag>`. From the
 Actions tab, or:
@@ -60,9 +61,13 @@ target, so bump them deliberately via a forced version.
   `k3s-system`, and ci-tools) use JSON matrices; `k3s-system` additionally
   emits a `(version, image)` cell matrix for its per-image build fan-out.
 - `oci-images.txt` — tracked image mirrors: `<name> <registry/repo>
-  <gh repo|pin:tag> <sed>`, one per line. `<gh repo>`'s latest release tag,
-  transformed by `<sed>`, is the image tag to mirror; `pin:<tag>` is a literal
-  tag for chart-pinned images. The check fails if a pinned tag is unavailable.
+  <gh repo|pin:tag|stack> <sed>`, one per line. `<gh repo>`'s latest release
+  tag, transformed by `<sed>`, is the image tag to mirror; `pin:<tag>` is a
+  literal tag for chart-pinned images (the check fails if it is unavailable);
+  `stack` marks a stack-governed product — its deployable versions are the
+  `oci-*` rows in `stacks.txt` (a `k3s` row covers `oci-k3s-upgrade`), so it
+  emits only what clouds declare and a held stack emits nothing. The row
+  still provides the registry repo and supports force-dispatch rebuilds.
 - `oci-mirror.sh <name> <repo:tag>` — `skopeo copy` re-encode of one upstream
   image's linux platforms to a zstd:chunked OCI layout (windows/darwin index
   entries are dropped — multi-GB layers no tea node can pull), layer-format

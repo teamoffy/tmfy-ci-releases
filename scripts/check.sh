@@ -158,6 +158,19 @@ ver_matrix() { # <product> <forced-ver> <candidates...>
 	printf '%s' "$_vm_m"
 }
 
+# Probe an image ref on the registry and queue a build cell for it. Skips
+# cells already queued (stack rows emit first). Returns nonzero when the tag
+# is not on the registry — the caller decides whether that's fatal.
+emit_oci() { # <name> <repo:tag> <version>
+	case " $oci_cell_keys " in *" $1:$3 "*) return 0 ;; esac
+	skopeo inspect --raw --retry-times 3 "docker://$2" >/dev/null 2>&1 || return 1
+	oci_cell_keys="$oci_cell_keys $1:$3"
+	oci_matrix="${oci_matrix:+$oci_matrix,}$(printf \
+		'{"name":"%s","ref":"%s","version":"%s"}' "$1" "$2" "$3")"
+	oci_build=true
+	echo "oci-$1: $2 build=true"
+}
+
 # -------------------------------------------------------------------- aws-lc
 decide aws-lc "$(force_or aws-lc "$(latest_gh aws/aws-lc 's/^v//')")"
 
@@ -533,10 +546,13 @@ decide flatcar-zfs-sysext "${sysext_flatcar}-zfs${sysext_zfs}"
 
 # --------------------------------------------------------------- oci mirrors
 # zstd:chunked repacks of upstream platform images. scripts/oci-images.txt
-# lists "<name> <registry/repo> <gh repo|pin:tag> <sed>": "latest" is the
-# upstream GitHub latest release tag transformed by <sed> ("-" or empty = no
-# transform), or a literal pin:<tag> for chart-pinned images with no release
-# source. Registry tag listings are unordered and paginated (ghcr caps
+# lists "<name> <registry/repo> <source> <sed>" where <source> is a GitHub
+# repo ("latest" is its latest release tag transformed by <sed>; "-"/empty =
+# no transform), pin:<tag> for a literal pin, or "stack" — stack-governed
+# products whose deployable versions are declared per cloud in stacks.txt.
+# Stack-governed rows exist for repo lookup and force-dispatch only: their
+# cells emit solely from stacks.txt rows, so a held stack emits nothing.
+# Registry tag listings are unordered and paginated (ghcr caps
 # tags/list at 100 per page), so they can't resolve latest — the GH release
 # is the source of truth, and the tag is then probed on the registry. A fresh
 # upstream release whose image is not pushed yet is skipped until the next
@@ -572,6 +588,37 @@ while read -r oci_name oci_repo oci_gh oci_sed || [ -n "$oci_name" ]; do
 	pinned=false
 	if [ "$oci_name" = "$force_oci_name" ] && [ -n "$force_oci_tag" ]; then
 		oci_tag=$force_oci_tag
+	elif [ "$oci_gh" = stack ]; then
+		# Stack-governed: deployable versions are declared per cloud in
+		# stacks.txt and cells emit solely from those rows — a held stack
+		# emits nothing, which is the point of the atomic gate. The row
+		# exists for repo lookup and force-dispatch.
+		awk -v n="oci-$oci_name" -v u="$oci_name" \
+			'NF>=3 && ($2 == n || (u == "k3s-upgrade" && $2 == "k3s")) { f=1 }
+			 END { exit !f }' "$stacks_file" || {
+			echo "check.sh: warning: stack-governed oci-$oci_name has no stacks.txt rows — it never builds" >&2
+		}
+		if [ "$forced" != true ]; then
+			echo "oci-$oci_name: governed by stacks.txt"
+			continue
+		fi
+		# Bare force on a stack product: rebuild every declared tag upstream
+		# still serves — released status doesn't apply under force.
+		ensure_cmds skopeo
+		emitted=false
+		while read -r _st st_prod st_tag _; do
+			case "$_st" in '' | '#'*) continue ;; esac
+			case "$st_prod" in
+			"oci-$oci_name") ;;
+			k3s) [ "$oci_name" = k3s-upgrade ] || continue
+				st_tag=$(printf '%s' "$st_tag" | tr '+' '-') ;;
+			*) continue ;;
+			esac
+			emit_oci "$oci_name" "$oci_repo:$st_tag" "${st_tag#v}" && emitted=true
+		done <"$stacks_file"
+		[ "$emitted" = true ] ||
+			echo "oci-$oci_name: no servable stacks.txt tags" >&2
+		continue
 	else
 		case "$oci_gh" in
 		pin:*)
@@ -591,18 +638,12 @@ while read -r oci_name oci_repo oci_gh oci_sed || [ -n "$oci_name" ]; do
 		if [ "$forced" = true ] ||
 			! printf '%s\n' "$existing_tags" | grep -qxF "oci-$oci_name/v$oci_ver"; then
 			ensure_cmds skopeo
-			if skopeo inspect --raw --retry-times 3 "docker://$oci_repo:$oci_tag" >/dev/null 2>&1; then
-				entry=$(printf '{"name":"%s","ref":"%s","version":"%s"}' \
-					"$oci_name" "$oci_repo:$oci_tag" "$oci_ver")
-				oci_matrix="${oci_matrix:+$oci_matrix,}$entry"
-				oci_cell_keys="$oci_cell_keys $oci_name:$oci_ver"
-				oci_build=true
-				echo "oci-$oci_name: $oci_repo:$oci_tag build=true"
-			elif [ "$forced" = true ] || [ "$pinned" = true ]; then
-				# A missing pinned tag is a configuration error.
-				echo "check.sh: image not on registry: $oci_repo:$oci_tag" >&2
-				exit 1
-			else
+			if ! emit_oci "$oci_name" "$oci_repo:$oci_tag" "$oci_ver"; then
+				if [ "$forced" = true ] || [ "$pinned" = true ]; then
+					# A missing pinned tag is a configuration error.
+					echo "check.sh: image not on registry: $oci_repo:$oci_tag" >&2
+					exit 1
+				fi
 				echo "oci-$oci_name: $oci_repo:$oci_tag not on registry yet — skipping"
 			fi
 		else
