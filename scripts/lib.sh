@@ -13,6 +13,15 @@ sha256_of() {
 	fi
 }
 
+# sha512_of <file> — print the sha512 hex digest.
+sha512_of() {
+	if command -v sha512sum >/dev/null 2>&1; then
+		sha512sum -- "$1" | cut -d ' ' -f1
+	else
+		shasum -a 512 -- "$1" | cut -d ' ' -f1
+	fi
+}
+
 # check_sha <file> [expected-sha256] — die on mismatch; no-op when unset/empty.
 check_sha() {
 	[ -n "${2:-}" ] || return 0
@@ -28,6 +37,31 @@ check_sha() {
 fetch() {
 	curl -fsSL --retry 3 -o "$2" "$1"
 	check_sha "$2" "${3:-}"
+	if [ -n "${UPSTREAM_SHA_LOG:-}" ]; then
+		echo "$(sha256_of "$2")  $(basename -- "$1")" >>"$UPSTREAM_SHA_LOG"
+	fi
+}
+
+# fetch_flatcar <artifact-url> <dest> — download a Flatcar release artifact and
+# verify it against the published <url>.DIGESTS sidecar (sha512 section). The
+# .DIGESTS file groups digests under "# SHA512 DIGESTS" style headers, so the
+# awk tracks which digest family it is reading. Logs the file's sha256 to
+# $UPSTREAM_SHA_LOG when set (what we ship), independent of the sha512 check.
+fetch_flatcar() {
+	digests=$(mktemp "${TMPDIR:-/tmp}/flatcar-digests.XXXXXX")
+	curl -fsSL --retry 3 -o "$digests" "$1.DIGESTS"
+	expected=$(awk -v artifact="${1##*/}" '
+		/^#/ { sha512 = tolower($0) ~ /sha512/; next }
+		sha512 && $2 == artifact && length($1) == 128 && $1 !~ /[^0-9a-f]/ { print $1; found++ }
+		END { if (found != 1) exit 1 }
+	' "$digests")
+	rm -f "$digests"
+	curl -fsSL --retry 3 -o "$2" "$1"
+	actual=$(sha512_of "$2")
+	if [ "$actual" != "$expected" ]; then
+		echo "fetch_flatcar: sha512 mismatch for $1: expected $expected, got $actual" >&2
+		exit 1
+	fi
 	if [ -n "${UPSTREAM_SHA_LOG:-}" ]; then
 		echo "$(sha256_of "$2")  $(basename -- "$1")" >>"$UPSTREAM_SHA_LOG"
 	fi

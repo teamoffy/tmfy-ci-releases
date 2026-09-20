@@ -14,23 +14,29 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 . "$script_dir/lib.sh"
 
 [ -d "$assets" ] || { echo "publish-release.sh: no assets dir $assets" >&2; exit 1; }
-found=false
-for f in "$assets"/*.tar.zst; do
-	[ -f "$f" ] && found=true && break
-done
-[ "$found" = true ] || {
-	echo "publish-release.sh: no .tar.zst assets in $assets" >&2
-	exit 1
-}
 
-rm -f "$assets/upstream-sha256.txt" "$assets"/*.sha256
+# Sidecars stay out of the release: upstream-* files carry provenance for the
+# notes, per-file .sha256s are redundant next to SHA256SUMS.txt, and
+# release-info.env is build plumbing.
+rm -f "$assets"/upstream-* "$assets"/*.sha256 "$assets/release-info.env"
+
+# SHA256SUMS.txt covers every file we ship — most products are tar.zst, but
+# mirror products publish upstream files verbatim (k3s binaries, Flatcar
+# images, sysext .raw). The case guard keeps SHA256SUMS.txt out of its own
+# input: the redirect creates it before the ./* glob expands.
 (
 	cd "$assets" &&
-		for f in ./*.tar.zst; do
+		for f in ./*; do
+			[ -f "$f" ] || continue
+			case "$f" in ./SHA256SUMS.txt) continue ;; esac
 			printf '%s  %s\n' "$(sha256_of "$f")" "${f#./}"
 		done >SHA256SUMS.txt
 )
-notes=$(mktemp "${TMPDIR:-/tmp}/release-notes.XXXXXX.md")
+[ -s "$assets/SHA256SUMS.txt" ] || {
+	echo "publish-release.sh: no assets in $assets" >&2
+	exit 1
+}
+notes=$(mktemp "${TMPDIR:-/tmp}/release-notes.XXXXXX")
 trap 'rm -f "$notes"' EXIT INT TERM
 cat >"$notes"
 

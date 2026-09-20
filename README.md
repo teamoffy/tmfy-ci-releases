@@ -23,6 +23,10 @@ per product are kept.
 | libgit2 | [libgit2](https://github.com/libgit2/libgit2) + [libssh2](https://github.com/libssh2/libssh2) | linux-x64, linux-arm64 | `/opt/libgit2` |
 | sqlite-vec | [asg017/sqlite-vec](https://github.com/asg017/sqlite-vec) | linux-x64, linux-arm64, darwin-arm64 | `/opt/sqlite-vec` |
 | llama-embedding | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `bNNNN` builds + [embeddinggemma-300M-GGUF](https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF) | linux-x64, linux-arm64, darwin-arm64 | `/opt/llama-embedding` |
+| k3s | [k3s-io/k3s](https://github.com/k3s-io/k3s) | verbatim upstream files, not tar.zst | — |
+| flatcar | [Flatcar stable channel](https://www.flatcar.org/releases/) | verbatim upstream files, amd64 + arm64 | — |
+| flatcar-zfs-sysext | Flatcar stable + [openzfs/zfs](https://github.com/openzfs/zfs) | squashfs `.raw`, amd64 + arm64 | `/etc/extensions` |
+| ci-tools | see [`ci-tools.txt`](scripts/ci-tools.txt) | linux-x64, linux-arm64 | `usr/local/bin`, `opt/` |
 
 Version tracking:
 
@@ -31,6 +35,47 @@ Version tracking:
   (the bundled SSH provider).
 - valkey and pgvector publish no binary GitHub releases, so their git tags are
   tracked; clickhouse tracks LTS tags.
+- **flatcar** and **flatcar-zfs-sysext** track the Flatcar *stable channel's*
+  current release (`amd64-usr/current/version.txt`), not a GitHub repo —
+  Flatcar has no releases API. The sysext version is the combo
+  `<flatcar>-zfs<zfs>`.
+
+## Mirrored node boot artifacts
+
+Two products exist because every cluster node downloads them at boot:
+
+- **k3s** — `k3s`/`k3s-arm64` binaries, `k3s-airgap-images-<arch>.tar.zst`,
+  `k3s-images.txt`, and `install.sh`, byte-verbatim from
+  [k3s-io/k3s](https://github.com/k3s-io/k3s). Binaries and airgap tarballs are
+  verified against upstream `sha256sum-<arch>.txt` *and* their GitHub asset
+  digests; `install.sh` is not a release asset upstream, so it is fetched from
+  the tag's git tree with only its sha256 recorded in the notes. Airgap use:
+  install the binary to `/usr/local/bin/k3s`, drop the airgap tarball into
+  `/var/lib/rancher/k3s/agent/images/`, run `INSTALL_K3S_SKIP_DOWNLOAD=true
+  sh install.sh`.
+- **flatcar** — `flatcar-openstack-*` (UpCloud/Alibaba image imports),
+  `flatcar-gce-*` (GCE import — amd64 only, upstream ships no arm64 GCE
+  image), `flatcar-dev-container-*` (the kernel-matched build container),
+  verified against upstream `.DIGESTS` sha512 sidecars. This is pin
+  insurance: the channel CDN drops old versions while consumer pins keep
+  referencing them.
+- **flatcar-zfs-sysext** — OpenZFS built as a systemd-sysext squashfs image
+  *inside the target Flatcar release's developer container*, so the module
+  matches its kernel. Assets are `zfs-<zfs>-<flatcar>-<arch>.raw` — drop into
+  `/etc/extensions` and run `systemd-sysext refresh`. The embedded,
+  image-matched `extension-release.*` file pins `VERSION_ID=<flatcar>`, so a
+  sysext only merges on the exact OS release it was built for.
+
+## CI tools
+
+`ci-tools.txt` drives verified mirrors of the small public binaries the
+platform pins by sha256 (hadolint, osv-scanner, kubectl, helm, yq, pulumi,
+aliyun-cli, upctl, actions-runner). Each tool gets its own `<name>/v<version>`
+release with `linux-x64`/`linux-arm64` tar.zst assets staging
+`usr/local/bin/<tool>` or `opt/<name>/`. Downloads are checked against the
+GitHub asset digest, or the upstream `.sha256`/`.sha256sum` sidecar for
+non-GitHub hosts (kubectl, helm). One release per tool means each tracks its own latest
+independently; the whole set force-rebuilds via `product=ci-tools`.
 
 ## OCI image mirrors
 

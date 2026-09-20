@@ -1,0 +1,27 @@
+# Small public binaries, mirrored verified as tar.zst (one release per tool:
+# <name>/v<version>). "latest" = the GitHub repo's latest release tag.
+#
+# columns:
+#   name          product/tool name ([a-z0-9-]+)
+#   gh-repo       owner/repo whose latest release is the version source
+#   url-x64       download URL for the linux-x64 asset ("-" to skip that arch)
+#   url-arm64     same for linux-arm64
+#   mode          bin              — URL is the bare binary -> usr/local/bin/<name>
+#                 tarbin:<member>  — tar.* archive; the file named <member> ->
+#                                  usr/local/bin/<member>
+#                 tardir           — tar.* archive is the whole install ->
+#                                  opt/<name>/
+#
+# URLs expand {tag} = upstream tag, {ver} = tag without a leading v.
+# Verification: github.com release URLs are checked against the asset's GitHub
+# digest; other hosts need a <url>.sha256 (or .sha256sum) sidecar.
+#
+hadolint       hadolint/hadolint      https://github.com/hadolint/hadolint/releases/download/{tag}/hadolint-linux-x86_64                        https://github.com/hadolint/hadolint/releases/download/{tag}/hadolint-linux-arm64                        bin
+osv-scanner    google/osv-scanner     https://github.com/google/osv-scanner/releases/download/{tag}/osv-scanner_linux_amd64                   https://github.com/google/osv-scanner/releases/download/{tag}/osv-scanner_linux_arm64                  bin
+kubectl        kubernetes/kubernetes  https://dl.k8s.io/release/{tag}/bin/linux/amd64/kubectl                                               https://dl.k8s.io/release/{tag}/bin/linux/arm64/kubectl                                                bin
+helm           helm/helm              https://get.helm.sh/helm-{tag}-linux-amd64.tar.gz                                                     https://get.helm.sh/helm-{tag}-linux-arm64.tar.gz                                                      tarbin:helm
+yq             mikefarah/yq           https://github.com/mikefarah/yq/releases/download/{tag}/yq_linux_amd64                                  https://github.com/mikefarah/yq/releases/download/{tag}/yq_linux_arm64                                 bin
+pulumi         pulumi/pulumi          https://github.com/pulumi/pulumi/releases/download/{tag}/pulumi-{tag}-linux-x64.tar.gz                https://github.com/pulumi/pulumi/releases/download/{tag}/pulumi-{tag}-linux-arm64.tar.gz               tardir
+aliyun-cli     aliyun/aliyun-cli      https://github.com/aliyun/aliyun-cli/releases/download/{tag}/aliyun-cli-linux-{ver}-amd64.tgz           https://github.com/aliyun/aliyun-cli/releases/download/{tag}/aliyun-cli-linux-{ver}-arm64.tgz            tarbin:aliyun
+upctl          UpCloudLtd/upcloud-cli https://github.com/UpCloudLtd/upcloud-cli/releases/download/{tag}/upcloud-cli_{ver}_linux_x86_64.tar.gz https://github.com/UpCloudLtd/upcloud-cli/releases/download/{tag}/upcloud-cli_{ver}_linux_arm64.tar.gz   tarbin:upctl
+actions-runner actions/runner         https://github.com/actions/runner/releases/download/{tag}/actions-runner-linux-x64-{ver}.tar.gz        https://github.com/actions/runner/releases/download/{tag}/actions-runner-linux-arm64-{ver}.tar.gz       tardir
