@@ -81,7 +81,11 @@ check_manifest() {
 }
 case "$(jq -r '.manifests[0].mediaType' "$layout/index.json")" in
 *image.index* | *manifest.list*)
-	jq -r '.manifests[].digest' "$(blob_path "$top_digest")" | while IFS= read -r child; do
+	# BuildKit adds unknown/unknown attestation children whose in-toto layers
+	# are metadata, not container image layers, and are copied verbatim.
+	jq -r '.manifests[] |
+		select(.annotations["vnd.docker.reference.type"] != "attestation-manifest") |
+		.digest' "$(blob_path "$top_digest")" | while IFS= read -r child; do
 		check_manifest "$(blob_path "$child")"
 	done ;;
 *)
