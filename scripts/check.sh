@@ -37,7 +37,7 @@ force_tool=
 force_tool_tag=
 force_all_tools=false
 case "$force_product" in
-"" | aws-lc | bun | zlib-ng | postgres | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | flatcar | flatcar-zfs-sysext) ;;
+"" | aws-lc | bun | zlib-ng | postgres | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext) ;;
 oci-mirror)
 	if [ -n "$force_version" ]; then
 		case "$force_version" in
@@ -131,6 +131,31 @@ force_or() { # <product> <upstream-latest>  -> the version to build
 	else
 		printf '%s\n' "$2"
 	fi
+}
+
+# Emit {"version":...} matrix cells on stdout for every candidate whose
+# release tag is missing (the forced version always emits). Progress lines go
+# to stderr so the function can be used in $(...).
+ver_matrix() { # <product> <forced-ver> <candidates...>
+	_vm_p=$1
+	_vm_forced=$2
+	shift 2
+	_vm_m=
+	_vm_seen=
+	for _vm_v in "$@"; do
+		case " $_vm_seen " in
+		*" $_vm_v "*) continue ;;
+		esac
+		_vm_seen="$_vm_seen $_vm_v"
+		if [ "$_vm_v" = "$_vm_forced" ] ||
+			! printf '%s\n' "$existing_tags" | grep -qxF "$_vm_p/v$_vm_v"; then
+			_vm_m="${_vm_m:+$_vm_m,}{\"version\":\"$_vm_v\"}"
+			echo "$_vm_p: v$_vm_v build=true" >&2
+		else
+			echo "$_vm_p: v$_vm_v build=false" >&2
+		fi
+	done
+	printf '%s' "$_vm_m"
 }
 
 # -------------------------------------------------------------------- aws-lc
@@ -262,7 +287,156 @@ decide llama-embedding "$llama_v"
 # -------------------------------------------------------------------- k3s
 # Node binaries + zstd airgap images, mirrored verbatim from k3s-io releases —
 # fetched at every node boot, the same per-node-pull class as the oci mirrors.
-decide k3s "$(force_or k3s "$(latest_gh k3s-io/k3s 's/^v//')")"
+# One run can build upstream latest plus every version pinned in stacks.txt.
+# The matrix is emitted after the stack checks below.
+k3s_v=$(force_or k3s "$(latest_gh k3s-io/k3s 's/^v//')")
+k3s_candidates=$k3s_v
+k3s_forced_v=
+[ "$force_product" = k3s ] && k3s_forced_v=$k3s_v
+
+# --------------------------------------------------------------- k3s-system
+# Images listed by the k3s release itself: pause, coredns,
+# local-path-provisioner, klipper-helm, and busybox. Each k3s version gets one
+# release containing a zstd:chunked OCI asset per image.
+k3s_system_v=$(force_or k3s-system "$k3s_v")
+k3s_system_candidates=$k3s_system_v
+k3s_system_forced_v=
+[ "$force_product" = k3s-system ] && k3s_system_forced_v=$k3s_system_v
+
+# ------------------------------------------------------------------ stacks
+# stacks.txt declares the k3s and image versions used by each cloud. Rows from
+# a stack are queued only when all of them already exist here or are available
+# upstream. Build and publication failures are still handled by their jobs.
+stacks_file="$script_dir/stacks.txt"
+oci_file="$script_dir/oci-images.txt"
+oci_stack_cells=
+oci_cell_keys=
+
+awk '
+	/^[[:space:]]*(#|$)/ { next }
+	NF != 3 {
+		printf "check.sh: bad stacks.txt line %d: expected 3 fields\n", NR > "/dev/stderr"
+		bad = 1
+		next
+	}
+	$1 !~ /^[a-z0-9][a-z0-9-]*$/ ||
+	$2 !~ /^(k3s|oci-[a-z0-9][a-z0-9-]*)$/ ||
+	$3 !~ /^[a-zA-Z0-9_][a-zA-Z0-9_.+-]*$/ {
+		printf "check.sh: bad stacks.txt line %d: %s %s %s\n", NR, $1, $2, $3 > "/dev/stderr"
+		bad = 1
+		next
+	}
+	{
+		key = $1 SUBSEP $2
+		if (seen[key]++) {
+			printf "check.sh: duplicate stacks.txt product at line %d: %s %s\n", NR, $1, $2 > "/dev/stderr"
+			bad = 1
+		}
+	}
+	END { exit bad }
+' "$stacks_file"
+
+# Catch misspelled image products as configuration errors instead of holding
+# the affected stack forever.
+while read -r _s_stack _s_product _s_version; do
+	case "$_s_stack" in '' | '#'*) continue ;; esac
+	case "$_s_product" in
+	k3s) ;;
+	oci-*)
+		_s_name=${_s_product#oci-}
+		awk -v n="$_s_name" 'NF >= 4 && $1 == n { found = 1 } END { exit !found }' "$oci_file" || {
+			echo "check.sh: $_s_product in stacks.txt is not listed in oci-images.txt" >&2
+			exit 1
+		} ;;
+	esac
+done <"$stacks_file"
+
+stack_row_ok() { # <product> <tag> -> all required releases exist or can build
+	sver=${2#v}
+	case "$1" in
+	k3s)
+		upgrade_ver=$(printf '%s' "$sver" | tr '+' '-')
+		if printf '%s\n' "$existing_tags" | grep -qxF "k3s/v$sver" &&
+			printf '%s\n' "$existing_tags" | grep -qxF "k3s-system/v$sver" &&
+			printf '%s\n' "$existing_tags" | grep -qxF "oci-k3s-upgrade/v$upgrade_ver"; then
+			return 0
+		fi
+		gh api "repos/k3s-io/k3s/releases/tags/$2" >/dev/null 2>&1 &&
+			skopeo inspect --raw --retry-times 3 \
+				"docker://rancher/k3s-upgrade:$(printf '%s' "$2" | tr '+' '-')" \
+				>/dev/null 2>&1 ;;
+	oci-*)
+		printf '%s\n' "$existing_tags" | grep -qxF "$1/v$sver" && return 0
+		s_repo=$(awk -v n="${1#oci-}" 'NF>=4 && $1==n { print $2; exit }' "$oci_file")
+		[ -n "$s_repo" ] &&
+			skopeo inspect --raw --retry-times 3 \
+				"docker://$s_repo:$2" >/dev/null 2>&1 ;;
+	*) return 1 ;;
+	esac
+}
+
+stacks=$(awk 'NF>=3 && $1!~/^#/ { print $1 }' "$stacks_file" | sort -u)
+[ -n "$stacks" ] && ensure_cmds gh skopeo
+for stack in $stacks; do
+	held=
+	while read -r s_p s_v; do
+		stack_row_ok "$s_p" "$s_v" || held="$held $s_p=$s_v"
+	done <<-STACKROWS
+		$(awk -v s="$stack" 'NF>=3 && $1==s { print $2, $3 }' "$stacks_file")
+	STACKROWS
+	if [ -n "$held" ]; then
+		echo "stack $stack held; unavailable:$held" >&2
+		continue
+	fi
+	echo "stack $stack: all versions available"
+	while read -r s_p s_v; do
+		sver=${s_v#v}
+		case "$s_p" in
+		k3s)
+			case " $k3s_candidates " in
+			*" $sver "*) ;;
+			*) k3s_candidates="$k3s_candidates $sver" ;;
+			esac
+			case " $k3s_system_candidates " in
+			*" $sver "*) ;;
+			*) k3s_system_candidates="$k3s_system_candidates $sver" ;;
+			esac
+			s_name=k3s-upgrade
+			s_repo=docker.io/rancher/k3s-upgrade
+			s_tag=$(printf '%s' "$s_v" | tr '+' '-')
+			sver=$(printf '%s' "$sver" | tr '+' '-') ;;
+		oci-*)
+			s_name=${s_p#oci-}
+			s_repo=$(awk -v n="$s_name" 'NF>=4 && $1==n { print $2; exit }' "$oci_file")
+			s_tag=$s_v ;;
+		*) continue ;;
+		esac
+		printf '%s\n' "$existing_tags" | grep -qxF "oci-$s_name/v$sver" && continue
+		case " $oci_cell_keys " in
+		*" $s_name:$sver "*) ;;
+		*)
+			oci_cell_keys="$oci_cell_keys $s_name:$sver"
+			oci_stack_cells="${oci_stack_cells:+$oci_stack_cells,}$(printf \
+				'{"name":"%s","ref":"%s","version":"%s"}' \
+				"$s_name" "$s_repo:$s_tag" "$sver")" ;;
+		esac
+	done <<-STACKROWS
+		$(awk -v s="$stack" 'NF>=3 && $1==s { print $2, $3 }' "$stacks_file")
+	STACKROWS
+done
+
+# shellcheck disable=SC2086 # $k3s_candidates is a word list, split intended
+k3s_matrix=$(ver_matrix k3s "$k3s_forced_v" $k3s_candidates)
+k3s_build=false
+[ -n "$k3s_matrix" ] && k3s_build=true
+printf 'k3s_build=%s\nk3s_matrix={"include":[%s]}\n' "$k3s_build" "$k3s_matrix" >>"$out"
+
+# shellcheck disable=SC2086 # $k3s_system_candidates is a word list
+k3s_system_matrix=$(ver_matrix k3s-system "$k3s_system_forced_v" $k3s_system_candidates)
+k3s_system_build=false
+[ -n "$k3s_system_matrix" ] && k3s_system_build=true
+printf 'k3s_system_build=%s\nk3s_system_matrix={"include":[%s]}\n' \
+	"$k3s_system_build" "$k3s_system_matrix" >>"$out"
 
 # ------------------------------------------------------------------ flatcar
 # Public release artifacts under <channel>.release.flatcar-linux.net, mirrored
@@ -313,17 +487,21 @@ decide flatcar-zfs-sysext "${sysext_flatcar}-zfs${sysext_zfs}"
 
 # --------------------------------------------------------------- oci mirrors
 # zstd:chunked repacks of upstream platform images. scripts/oci-images.txt
-# lists "<name> <registry/repo> <gh repo> <sed>": "latest" is the upstream
-# GitHub latest release tag transformed by <sed> ("-" or empty = no transform).
-# Registry tag listings are unordered and paginated (ghcr caps tags/list at
-# 100 per page), so they can't resolve latest — the GH release is the source
-# of truth, and the tag is then probed on the registry. A fresh upstream
-# release whose image is not pushed yet is skipped until the next run.
+# lists "<name> <registry/repo> <gh repo|pin:tag> <sed>": "latest" is the
+# upstream GitHub latest release tag transformed by <sed> ("-" or empty = no
+# transform), or a literal pin:<tag> for chart-pinned images with no release
+# source. Registry tag listings are unordered and paginated (ghcr caps
+# tags/list at 100 per page), so they can't resolve latest — the GH release
+# is the source of truth, and the tag is then probed on the registry. A fresh
+# upstream release whose image is not pushed yet is skipped until the next
+# run. A missing pinned tag fails the run.
 # Output is a build matrix (all arches are handled in one skopeo copy).
-oci_file="$script_dir/oci-images.txt"
-oci_matrix=
+# Stack-declared pins from scripts/stacks.txt seed the matrix; the loop's
+# latest-resolution cells skip any name:version a stack already queued.
+oci_matrix=$oci_stack_cells
 oci_names=
 oci_build=false
+[ -n "$oci_matrix" ] && oci_build=true
 oci_matched_force=false
 while read -r oci_name oci_repo oci_gh oci_sed || [ -n "$oci_name" ]; do
 	case "$oci_name" in '' | '#'*) continue ;; esac
@@ -345,30 +523,46 @@ while read -r oci_name oci_repo oci_gh oci_sed || [ -n "$oci_name" ]; do
 		forced=true
 	fi
 	case "$oci_sed" in '' | -) oci_sed='s/$//' ;; esac
+	pinned=false
 	if [ "$oci_name" = "$force_oci_name" ] && [ -n "$force_oci_tag" ]; then
 		oci_tag=$force_oci_tag
 	else
-		oci_tag=$(latest_gh "$oci_gh" "$oci_sed")
+		case "$oci_gh" in
+		pin:*)
+			# Chart-pinned image or a registry with no release source: the
+			# tag is literal, bumped by editing this file.
+			oci_tag=${oci_gh#pin:}
+			pinned=true ;;
+		*)
+			oci_tag=$(latest_gh "$oci_gh" "$oci_sed") ;;
+		esac
 	fi
 	oci_ver="${oci_tag#v}"
-	if [ "$forced" = true ] ||
-		! printf '%s\n' "$existing_tags" | grep -qxF "oci-$oci_name/v$oci_ver"; then
-		ensure_cmds skopeo
-		if skopeo inspect --raw "docker://$oci_repo:$oci_tag" >/dev/null 2>&1; then
-			entry=$(printf '{"name":"%s","ref":"%s","version":"%s"}' \
-				"$oci_name" "$oci_repo:$oci_tag" "$oci_ver")
-			oci_matrix="${oci_matrix:+$oci_matrix,}$entry"
-			oci_build=true
-			echo "oci-$oci_name: $oci_repo:$oci_tag build=true"
-		elif [ "$forced" = true ]; then
-			echo "check.sh: image not on registry: $oci_repo:$oci_tag" >&2
-			exit 1
+	case " $oci_cell_keys " in
+	*" $oci_name:$oci_ver "*)
+		echo "oci-$oci_name: $oci_repo:$oci_tag already queued by a stack" ;;
+	*)
+		if [ "$forced" = true ] ||
+			! printf '%s\n' "$existing_tags" | grep -qxF "oci-$oci_name/v$oci_ver"; then
+			ensure_cmds skopeo
+			if skopeo inspect --raw --retry-times 3 "docker://$oci_repo:$oci_tag" >/dev/null 2>&1; then
+				entry=$(printf '{"name":"%s","ref":"%s","version":"%s"}' \
+					"$oci_name" "$oci_repo:$oci_tag" "$oci_ver")
+				oci_matrix="${oci_matrix:+$oci_matrix,}$entry"
+				oci_cell_keys="$oci_cell_keys $oci_name:$oci_ver"
+				oci_build=true
+				echo "oci-$oci_name: $oci_repo:$oci_tag build=true"
+			elif [ "$forced" = true ] || [ "$pinned" = true ]; then
+				# A missing pinned tag is a configuration error.
+				echo "check.sh: image not on registry: $oci_repo:$oci_tag" >&2
+				exit 1
+			else
+				echo "oci-$oci_name: $oci_repo:$oci_tag not on registry yet — skipping"
+			fi
 		else
-			echo "oci-$oci_name: $oci_repo:$oci_tag not on registry yet — skipping"
-		fi
-	else
-		echo "oci-$oci_name: oci-$oci_name/v$oci_ver build=false"
-	fi
+			echo "oci-$oci_name: oci-$oci_name/v$oci_ver build=false"
+		fi ;;
+	esac
 done <"$oci_file"
 if [ -n "$force_oci_name" ] && [ "$oci_matched_force" = false ]; then
 	echo "check.sh: '$force_oci_name' is not in oci-images.txt" >&2

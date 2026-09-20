@@ -3,14 +3,17 @@
 ## Pipeline
 
 One workflow ([`release.yml`](.github/workflows/release.yml)), one daily run
-(06:17 UTC), 36 jobs:
+(06:17 UTC), 38 jobs:
 
 1. **check** — resolves every product's target version from upstream (GitHub
    releases where they exist, git tags or index listings where they don't, and
    the Flatcar channel's `version.txt`) and decides whether that version is
    already released here. For the `oci-*` image mirrors it also probes each
-   resolved tag on its registry, and for both `oci-*` and the `ci-tools.txt`
-   tools it emits a dynamic build matrix of what's missing.
+   resolved tag on its registry, and for `oci-*`, `k3s`, `k3s-system`, and the
+   `ci-tools.txt` tools it emits a dynamic build matrix of what's missing.
+   It also checks [`stacks.txt`](scripts/stacks.txt). A stack is added to the
+   build matrices only when all of its pinned versions are available upstream
+   or already released here.
 2. **build-\<product\>** — one parallel job per product with its own platform
    matrix. `fail-fast: false` lets the other targets finish if one target fails.
    Every product is smoke-tested before publishing: compiled-and-run for the
@@ -52,12 +55,13 @@ target, so bump them deliberately via a forced version.
 ## Scripts
 
 - `check.sh` — version resolution for all products. Reads `FORCE_PRODUCT` /
-  `FORCE_VERSION`, writes `<product>_version` / `<product>_build` lines to
-  `GITHUB_OUTPUT` (plus `oci_matrix`/`oci_build` for the image mirrors and
-  `tools_matrix`/`tools_build` for the ci-tools set).
-- `oci-images.txt` — tracked image mirrors: `<name> <registry/repo> <gh repo>
-  <sed>`, one per line. `<gh repo>`'s latest release tag, transformed by
-  `<sed>`, is the image tag to mirror.
+  `FORCE_VERSION` and writes versions and build decisions to `GITHUB_OUTPUT`.
+  Products that can build several releases in one run (`oci-*`, `k3s`,
+  `k3s-system`, and ci-tools) use JSON matrices.
+- `oci-images.txt` — tracked image mirrors: `<name> <registry/repo>
+  <gh repo|pin:tag> <sed>`, one per line. `<gh repo>`'s latest release tag,
+  transformed by `<sed>`, is the image tag to mirror; `pin:<tag>` is a literal
+  tag for chart-pinned images. The check fails if a pinned tag is unavailable.
 - `oci-mirror.sh <name> <repo:tag>` — `skopeo copy --all` re-encode of one
   upstream image to a zstd:chunked OCI layout, layer-format verification, then
   `pack.sh` to a `-oci.tar.zst` asset plus a `release-info.env` provenance
@@ -66,6 +70,16 @@ target, so bump them deliberately via a forced version.
   airgap tarballs, `k3s-images.txt`, and `install.sh`; binaries/airgap are
   verified against upstream `sha256sum-<arch>.txt` and everything else against
   GitHub asset digests. Takes `K3S_WORK` and `GH_TOKEN`.
+- `k3s-system-mirror.sh <version>` — mirrors the system images the k3s
+  release's own `k3s-images.txt` lists (minus the components tea disables),
+  via `oci-mirror.sh` per image, into one `k3s-system/v<version>` release.
+  Takes `K3S_SYSTEM_WORK` and `GH_TOKEN`.
+- `stacks.txt` — per-cloud deployed node sets: `<stack> <product> <tag>` per
+  line. Clouds track k8s versions independently. `check.sh` probes every row
+  and queues the stack only if each release already exists or its upstream tag
+  is available. A `k3s` row covers `k3s`, `k3s-system`, and
+  `oci-k3s-upgrade`; `oci-*` rows add cells to the image build matrix. Update
+  all related rows in one PR when bumping a cloud.
 - `flatcar-mirror.sh <version>` — verbatim mirror of the openstack/GCE/
   developer-container artifacts, verified against the upstream `.DIGESTS`
   sha512 sidecars. All kinds for `amd64`; `arm64` skips GCE (upstream ships
