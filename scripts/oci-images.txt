@@ -3,22 +3,43 @@
 #
 # <name>            product suffix; releases are tagged oci-<name>/v<version>
 # <registry/repo>   image repository to pull (public, anonymous)
-# <gh-owner/repo>   GitHub repo whose latest release tag is the image's version
+# <gh-owner/repo>   GitHub repo whose latest release tag is the image's version,
+#                   or "pin:<tag>" for a literal pinned tag (chart-pinned
+#                   images and registries with no release source; bump the pin
+#                   in this file to update)
 # <sed>             expression applied to the release tag to get the image tag,
 #                   "-" for none (e.g. k3s releases are v1.x.y+k3sN but the
-#                   docker tag is v1.x.y-k3sN)
+#                   docker tag is v1.x.y-k3sN). Unused for pin: rows.
 #
 # "Latest" is the upstream GitHub latest release — registry tag listings are
 # unordered and paginated (ghcr caps /tags/list at 100 per page), so they
 # cannot resolve latest. If a release tag has not been pushed to the registry
-# yet, the image is skipped and picked up by the next run.
+# yet, the image is skipped and picked up by the next run. A pin: row whose
+# tag is missing fails the check.
 #
-# This is the per-node DaemonSet set (that's where cross-node pull cost lives).
+# This list covers DaemonSets, CSI sidecars, cloud controllers, and upgrade
+# images. The images listed by k3s itself are handled by k3s-system.
 cilium                    quay.io/cilium/cilium                                     cilium/cilium                                     -
+cilium-operator           quay.io/cilium/operator                                   cilium/cilium                                     -
+cilium-envoy              quay.io/cilium/cilium-envoy                               pin:v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82  -
 tetragon                  quay.io/cilium/tetragon                                   cilium/tetragon                                   -
 k3s-upgrade               docker.io/rancher/k3s-upgrade                             k3s-io/k3s                                        s/+/-/
+system-upgrade-controller docker.io/rancher/system-upgrade-controller               rancher/system-upgrade-controller                 -
+kubectl                   docker.io/rancher/kubectl                                 pin:v1.36.2                                       -
+kuberlr-kubectl           docker.io/rancher/kuberlr-kubectl                         rancher/kuberlr-kubectl                           -
 kured                     ghcr.io/kubereboot/kured                                  kubereboot/kured                                  -
+vector                    docker.io/timberio/vector                                 pin:0.58.0-distroless-libc                        -
 upcloud-csi               ghcr.io/upcloudltd/upcloud-csi                            UpCloudLtd/upcloud-csi                            -
+upcloud-ccm               ghcr.io/upcloudltd/cloud-controller-manager               UpCloudLtd/upcloud-cloud-controller-manager       -
 local-volume-provisioner  registry.k8s.io/sig-storage/local-volume-provisioner      kubernetes-sigs/sig-storage-local-static-provisioner  s/^local-static-provisioner-/v/
+csi-provisioner           registry.k8s.io/sig-storage/csi-provisioner               kubernetes-csi/external-provisioner               -
+csi-attacher              registry.k8s.io/sig-storage/csi-attacher                  kubernetes-csi/external-attacher                  -
+csi-resizer               registry.k8s.io/sig-storage/csi-resizer                   kubernetes-csi/external-resizer                   -
+csi-snapshotter           registry.k8s.io/sig-storage/csi-snapshotter               kubernetes-csi/external-snapshotter               -
+snapshot-controller       registry.k8s.io/sig-storage/snapshot-controller           kubernetes-csi/external-snapshotter               -
 csi-node-driver-registrar registry.k8s.io/sig-storage/csi-node-driver-registrar     kubernetes-csi/node-driver-registrar              -
 livenessprobe             registry.k8s.io/sig-storage/livenessprobe                 kubernetes-csi/livenessprobe                      -
+gcp-ccm                   registry.k8s.io/cloud-provider-gcp/cloud-controller-manager  pin:v36.4.7                                    -
+gcp-pd-csi-driver         registry.k8s.io/cloud-provider-gcp/gcp-compute-persistent-disk-csi-driver  kubernetes-sigs/gcp-compute-persistent-disk-csi-driver  -
+alicloud-ccm              registry-cn-hangzhou.ack.aliyuncs.com/acs/cloud-controller-manager  kubernetes/cloud-provider-alibaba-cloud  -
+alicloud-csi-plugin       registry.cn-beijing.aliyuncs.com/acs/csi-plugin           kubernetes-sigs/alibaba-cloud-csi-driver          -

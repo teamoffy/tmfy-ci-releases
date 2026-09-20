@@ -14,8 +14,8 @@ on:
           Product to force-rebuild (always builds and replaces its release assets). One of:
           aws-lc, bun, zlib-ng, postgres, valkey, clickhouse, pebble, typesense,
           zstd, libgit2, sqlite-vec, llama-embedding, oci-mirror (or oci-<name>),
-          k3s, flatcar, flatcar-zfs-sysext, ci-tools (or a tool name from
-          ci-tools.txt). Empty = check every product for upstream updates.
+          k3s, k3s-system, flatcar, flatcar-zfs-sysext, ci-tools (or a tool name
+          from ci-tools.txt). Empty = check every product for upstream updates.
         required: false
         type: string
       version:
@@ -83,8 +83,10 @@ jobs:
       llama_embedding_build: ${{ steps.resolve.outputs.llama_embedding_build }}
       oci_matrix: ${{ steps.resolve.outputs.oci_matrix }}
       oci_build: ${{ steps.resolve.outputs.oci_build }}
-      k3s_version: ${{ steps.resolve.outputs.k3s_version }}
+      k3s_matrix: ${{ steps.resolve.outputs.k3s_matrix }}
       k3s_build: ${{ steps.resolve.outputs.k3s_build }}
+      k3s_system_matrix: ${{ steps.resolve.outputs.k3s_system_matrix }}
+      k3s_system_build: ${{ steps.resolve.outputs.k3s_system_build }}
       flatcar_version: ${{ steps.resolve.outputs.flatcar_version }}
       flatcar_build: ${{ steps.resolve.outputs.flatcar_build }}
       flatcar_zfs_sysext_flatcar: ${{ steps.resolve.outputs.flatcar_zfs_sysext_flatcar }}
@@ -961,11 +963,15 @@ jobs:
           EOF
 
   # ------------------------------------------------------------------ k3s
+  # Build upstream latest plus any versions pinned in stacks.txt.
   build-k3s:
     needs: check
     if: needs.check.outputs.k3s_build == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.check.outputs.k3s_matrix) }}
     steps:
       - name: Clone the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -975,11 +981,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           K3S_WORK: ${{ runner.temp }}/k3s-work
-        run: sh scripts/k3s-mirror.sh "${{ needs.check.outputs.k3s_version }}"
+        run: sh scripts/k3s-mirror.sh "${{ matrix.version }}"
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: k3s-${{ needs.check.outputs.k3s_version }}
+          name: k3s-${{ matrix.version }}
           path: ${{ runner.temp }}/k3s-work/out/
           if-no-files-found: error
           compression-level: 0
@@ -994,7 +1000,6 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      VERSION: ${{ needs.check.outputs.k3s_version }}
     steps:
       - name: Clone the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1003,23 +1008,100 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: k3s-*
-          merge-multiple: true
+          pattern: k3s-[0-9]*
           path: assets
-      - name: Publish release
+      - name: Publish releases
         run: |
           set -eu
-          install_sha=$(sha256sum assets/install.sh | cut -d ' ' -f1)
-          sh scripts/publish-release.sh "k3s/v${VERSION}" "k3s ${VERSION}" assets <<EOF
-          k3s ${VERSION} mirrored verbatim from k3s-io/k3s — the node binaries and zstd airgap images a node boot pulls.
+          for dir in assets/k3s-*/; do
+            ver=${dir#assets/k3s-}
+            ver=${ver%/}
+            install_sha=$(sha256sum "$dir/install.sh" | cut -d ' ' -f1)
+            sh scripts/publish-release.sh "k3s/v${ver}" "k3s ${ver}" "$dir" <<EOF
+          k3s ${ver} mirrored verbatim from k3s-io/k3s — the node binaries and zstd airgap images a node boot pulls.
 
-          - Upstream: https://github.com/k3s-io/k3s/releases/tag/v${VERSION}
+          - Upstream: https://github.com/k3s-io/k3s/releases/tag/v${ver}
           - Assets: \`k3s\` (amd64), \`k3s-arm64\`, \`k3s-airgap-images-{amd64,arm64}.tar.zst\`, \`k3s-images.txt\`, \`install.sh\`. Only the zstd airgap variants are mirrored.
           - Verified: binaries and airgap tarballs against upstream \`sha256sum-<arch>.txt\`; all release assets against their GitHub asset digests. \`install.sh\` ships in the git tree, not as a release asset — no upstream checksum exists; as-shipped sha256 \`${install_sha}\`.
           - Use (airgap): install \`k3s\`/\`k3s-arm64\` to \`/usr/local/bin/k3s\`, drop the matching airgap tarball into \`/var/lib/rancher/k3s/agent/images/\`, then \`INSTALL_K3S_SKIP_DOWNLOAD=true sh install.sh\`.
           - Verify: \`sha256sum -c SHA256SUMS.txt\`
           - License: Apache-2.0 (upstream)
           EOF
+          done
+
+  # ------------------------------------------------------------ k3s-system
+  # Mirror the enabled images from each k3s release's k3s-images.txt.
+  build-k3s-system:
+    needs: check
+    if: needs.check.outputs.k3s_system_build == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.check.outputs.k3s_system_matrix) }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Mirror k3s system images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          K3S_SYSTEM_WORK: ${{ runner.temp }}/k3s-system-work
+        run: sh scripts/k3s-system-mirror.sh "${{ matrix.version }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: k3s-system-${{ matrix.version }}
+          path: ${{ runner.temp }}/k3s-system-work/out/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  release-k3s-system:
+    needs: [check, build-k3s-system]
+    if: needs.check.outputs.k3s_system_build == 'true' && needs.build-k3s-system.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: k3s-system-*
+          path: assets
+      - name: Publish releases
+        run: |
+          set -eu
+          for dir in assets/k3s-system-*/; do
+            ver=${dir#assets/k3s-system-}
+            ver=${ver%/}
+            image_lines=$(for f in "$dir"/upstream-info-*.env; do
+              [ -f "$f" ] || continue
+              # shellcheck disable=SC1090 # generated env files from the build job
+              . "$f"
+              printf "    - \`%s\` -> \`oci-%s-%s-oci.tar.zst\` (upstream %s -> layout %s)\n" \
+                "$REF" "$NAME" "$VERSION" "$UPSTREAM_DIGEST" "$OCI_DIGEST"
+            done)
+            sh scripts/publish-release.sh "k3s-system/v${ver}" "k3s-system ${ver}" "$dir" <<EOF
+          zstd:chunked mirrors of the enabled system images listed in k3s v${ver}'s \`k3s-images.txt\`.
+
+          - Source: https://github.com/k3s-io/k3s/releases/download/v${ver}/k3s-images.txt, verified against its GitHub asset digest. Images disabled by tea (traefik, metrics-server, and klipper-lb) are skipped.
+          - Images (upstream digest -> layout digest):
+          ${image_lines}
+          - Repack: \`skopeo copy --all --dest-compress-format zstd:chunked --dest-compress-level 19 --dest-force-compress-format\`; layers re-encoded, so digests differ from upstream.
+          - Use: extract the asset (its root is an OCI layout dir), then \`skopeo copy --all --preserve-digests oci:<dir>:<tag> docker://<registry>/<repo>:<tag>\`, or feed an OCI-layout consumer directly (e.g. sync-oci-to-s3.sh).
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - Licenses: unchanged from the upstream images
+          EOF
+          done
 
   # ---------------------------------------------------------------- flatcar
   # Byte-verbatim mirror of the release artifacts tea consumes: the openstack
@@ -1329,6 +1411,7 @@ jobs:
         release-sqlite-vec,
         release-llama-embedding,
         release-k3s,
+        release-k3s-system,
         release-flatcar,
         release-flatcar-zfs-sysext,
         release-ci-tools,

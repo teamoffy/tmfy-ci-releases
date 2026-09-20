@@ -24,6 +24,7 @@ per product are kept.
 | sqlite-vec | [asg017/sqlite-vec](https://github.com/asg017/sqlite-vec) | linux-x64, linux-arm64, darwin-arm64 | `/opt/sqlite-vec` |
 | llama-embedding | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `bNNNN` builds + [embeddinggemma-300M-GGUF](https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF) | linux-x64, linux-arm64, darwin-arm64 | `/opt/llama-embedding` |
 | k3s | [k3s-io/k3s](https://github.com/k3s-io/k3s) | verbatim upstream files, not tar.zst | — |
+| k3s-system | k3s release's `k3s-images.txt` | per-image OCI `.tar.zst` assets | — |
 | flatcar | [Flatcar stable channel](https://www.flatcar.org/releases/) | verbatim upstream files, amd64 + arm64 | — |
 | flatcar-zfs-sysext | Flatcar stable + [openzfs/zfs](https://github.com/openzfs/zfs) | squashfs `.raw`, amd64 + arm64 | `/etc/extensions` |
 | ci-tools | see [`ci-tools.txt`](scripts/ci-tools.txt) | linux-x64, linux-arm64 | `usr/local/bin`, `opt/` |
@@ -83,8 +84,31 @@ independently; the whole set force-rebuilds via `product=ci-tools`.
 OCI image layouts (`skopeo copy --all --dest-compress-format zstd:chunked
 --dest-compress-level 19`), one `<product>-<version>-oci.tar.zst` asset per
 image covering every published architecture. The tracked set lives in
-[`oci-images.txt`](scripts/oci-images.txt). Tags follow each upstream project's
-latest GitHub release and are checked against the registry before building.
+[`oci-images.txt`](scripts/oci-images.txt): DaemonSets, CSI sidecars, cloud
+controllers, and upgrade images. Tags follow each upstream
+project's latest GitHub release and are checked against the registry before
+building. Images without a suitable release source use a literal `pin:<tag>`;
+the check fails if that tag is unavailable.
+
+Each k3s version also has a `k3s-system/v<k3s-version>` release. It mirrors
+pause, coredns, local-path-provisioner, klipper-helm, and busybox as individual
+`oci-<image>-<tag>-oci.tar.zst` assets. The verified `k3s-images.txt` from that
+k3s release supplies the list; traefik, metrics-server, and klipper-lb are
+skipped because tea disables them.
+
+## Per-cloud stacks
+
+[`stacks.txt`](scripts/stacks.txt) declares the k3s and node-image versions for
+each cloud. Clouds can move to a new k8s version independently.
+
+A stack is queued only when every row is available upstream or already has an
+exact release here. A `k3s` row covers the k3s files, the k3s-system images,
+and `rancher/k3s-upgrade` at the same version. The workflow can build upstream
+latest and several stack-pinned versions in one run. Update all related rows
+together when bumping a cloud.
+
+Latest-version checks still run alongside the stack pins, so an older pin and
+a newer upstream release can both be built in the same run.
 
 ```sh
 curl -fsSL --retry 3 -O "https://github.com/teamoffy/tmfy-ci-releases/releases/download/oci-cilium/v1.20.2/oci-cilium-1.20.2-oci.tar.zst"

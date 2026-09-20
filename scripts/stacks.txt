@@ -1,0 +1,83 @@
+# k3s and node-image versions deployed in each cloud. Clouds can move to a new
+# k8s version independently.
+#
+#   <stack> <product> <version-or-tag>
+#
+# A stack is queued only when every row is available upstream or already has a
+# release here. Build and publication failures are handled by the workflow.
+#
+# Products allowed here:
+#   k3s      — implies k3s (binaries), k3s-system (system-image mirrors),
+#              and oci-k3s-upgrade at the same version
+#   oci-*    — any image in oci-images.txt; <version-or-tag> is the image tag
+#
+# Products with an existing release are treated as satisfied and are not
+# rebuilt.
+#
+# Update all related rows together when bumping a cloud.
+
+# --------------------------------------------------------------- upcloud
+upcloud k3s v1.37.0+k3s1
+upcloud oci-kuberlr-kubectl v8.1.2
+upcloud oci-system-upgrade-controller v0.20.1
+upcloud oci-upcloud-ccm v1.2.3
+upcloud oci-upcloud-csi v1.4.0
+upcloud oci-csi-provisioner v6.3.0
+upcloud oci-csi-attacher v4.13.0
+upcloud oci-csi-resizer v2.2.1
+upcloud oci-csi-snapshotter v8.6.0
+upcloud oci-snapshot-controller v8.6.0
+upcloud oci-csi-node-driver-registrar v2.18.0
+upcloud oci-livenessprobe v2.20.0
+upcloud oci-cilium v1.20.2
+upcloud oci-cilium-operator v1.20.2
+upcloud oci-cilium-envoy v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82
+upcloud oci-tetragon v1.7.1
+upcloud oci-kured 1.23.0
+upcloud oci-vector 0.58.0-distroless-libc
+upcloud oci-local-volume-provisioner v2.9.0
+
+# -------------------------------------------------------------------- gcp
+# Held at 1.36: the cloud-provider-gcp CCM minor tracks the k8s minor and no
+# v37 CCM image exists — bump the k3s row and the CCM row together when one
+# lands.
+gcp k3s v1.36.4+k3s1
+gcp oci-kuberlr-kubectl v8.1.2
+gcp oci-system-upgrade-controller v0.20.1
+gcp oci-gcp-ccm v36.4.7
+gcp oci-gcp-pd-csi-driver v1.26.1
+gcp oci-csi-provisioner v6.3.0
+gcp oci-csi-attacher v4.13.0
+gcp oci-csi-resizer v2.2.1
+gcp oci-csi-snapshotter v8.6.0
+gcp oci-snapshot-controller v8.6.0
+gcp oci-csi-node-driver-registrar v2.18.0
+gcp oci-livenessprobe v2.20.0
+gcp oci-cilium v1.20.2
+gcp oci-cilium-operator v1.20.2
+gcp oci-cilium-envoy v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82
+gcp oci-tetragon v1.7.1
+gcp oci-kured 1.23.0
+gcp oci-vector 0.58.0-distroless-libc
+gcp oci-local-volume-provisioner v2.9.0
+
+# -------------------------------------------------------------- alicloud
+alicloud k3s v1.37.0+k3s1
+alicloud oci-kuberlr-kubectl v8.1.2
+alicloud oci-system-upgrade-controller v0.20.1
+alicloud oci-alicloud-ccm v2.15.0
+alicloud oci-alicloud-csi-plugin v1.36.2
+alicloud oci-csi-provisioner v6.3.0
+alicloud oci-csi-attacher v4.13.0
+alicloud oci-csi-resizer v2.2.1
+alicloud oci-csi-snapshotter v8.6.0
+alicloud oci-snapshot-controller v8.6.0
+alicloud oci-csi-node-driver-registrar v2.18.0
+alicloud oci-livenessprobe v2.20.0
+alicloud oci-cilium v1.20.2
+alicloud oci-cilium-operator v1.20.2
+alicloud oci-cilium-envoy v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82
+alicloud oci-tetragon v1.7.1
+alicloud oci-kured 1.23.0
+alicloud oci-vector 0.58.0-distroless-libc
+alicloud oci-local-volume-provisioner v2.9.0
