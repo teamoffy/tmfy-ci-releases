@@ -85,10 +85,12 @@ OCI image layouts (`skopeo copy --all --dest-compress-format zstd:chunked
 --dest-compress-level 19`), one `<product>-<version>-oci.tar.zst` asset per
 image covering every published architecture. The tracked set lives in
 [`oci-images.txt`](scripts/oci-images.txt): DaemonSets, CSI sidecars, cloud
-controllers, and upgrade images. Tags follow each upstream
-project's latest GitHub release and are checked against the registry before
-building. Images without a suitable release source use a literal `pin:<tag>`;
-the check fails if that tag is unavailable.
+controllers, and upgrade images. Most images are **stack-governed** (`stack`):
+only the versions declared in [`stacks.txt`](scripts/stacks.txt) are mirrored,
+so a held stack builds nothing. Images with a release source follow that
+repo's latest GitHub release tag, checked against the registry before
+building; chart-pinned images use a literal `pin:<tag>`, and the check fails
+if it is unavailable.
 
 Each k3s version also has a `k3s-system/v<k3s-version>` release. It mirrors
 pause, coredns, local-path-provisioner, klipper-helm, and busybox as individual
@@ -107,8 +109,9 @@ and `rancher/k3s-upgrade` at the same version. The workflow can build upstream
 latest and several stack-pinned versions in one run. Update all related rows
 together when bumping a cloud.
 
-Latest-version checks still run alongside the stack pins, so an older pin and
-a newer upstream release can both be built in the same run.
+`k3s` and `k3s-system` still build upstream latest alongside the pins, so an
+older pin and a newer upstream release can both be built in the same run. The
+stack-governed OCI images build only the tags their stacks declare.
 
 ```sh
 curl -fsSL --retry 3 -O "https://github.com/teamoffy/tmfy-ci-releases/releases/download/oci-cilium/v1.20.2/oci-cilium-1.20.2-oci.tar.zst"
