@@ -158,12 +158,43 @@ ver_matrix() { # <product> <forced-ver> <candidates...>
 	printf '%s' "$_vm_m"
 }
 
+oci_probe() { # <repo:tag> — is this image actually pushed?
+	skopeo inspect --raw --retry-times 3 "docker://$1" >/dev/null 2>&1
+}
+
+# Print the newest image tag that is actually on the registry. Upstream's
+# latest release is preferred, but a GitHub release can precede (or skip)
+# registry promotion — an unpromoted release is not eligible, so fall back
+# through the newest releases (version order) to the newest servable tag.
+# Empty output = nothing servable.
+latest_eligible_oci() { # <gh-repo> <sed> <registry-repo>
+	_le_tag=$(latest_gh "$1" "$2")
+	# No latest release: nothing to fall back to. Empty output, not a
+	# failure — the caller reports the skip (a nonzero return here would
+	# abort the whole run under set -e).
+	[ -n "$_le_tag" ] || return 0
+	oci_probe "$3:$_le_tag" && {
+		printf '%s\n' "$_le_tag"
+		return 0
+	}
+	gh release list --repo "$1" --limit 10 --json tagName,isPrerelease \
+		--jq '.[] | select(.isPrerelease | not) | .tagName' 2>/dev/null |
+	sort -Vr |
+	while IFS= read -r _le_rel; do
+		_le_img=$(printf '%s' "$_le_rel" | sed "$2")
+		[ "$_le_img" = "$_le_tag" ] && continue
+		oci_probe "$3:$_le_img" || continue
+		printf '%s\n' "$_le_img"
+		break
+	done
+}
+
 # Probe an image ref on the registry and queue a build cell for it. Skips
 # cells already queued (stack rows emit first). Returns nonzero when the tag
 # is not on the registry — the caller decides whether that's fatal.
 emit_oci() { # <name> <repo:tag> <version>
 	case " $oci_cell_keys " in *" $1:$3 "*) return 0 ;; esac
-	skopeo inspect --raw --retry-times 3 "docker://$2" >/dev/null 2>&1 || return 1
+	oci_probe "$2" || return 1
 	oci_cell_keys="$oci_cell_keys $1:$3"
 	oci_matrix="${oci_matrix:+$oci_matrix,}$(printf \
 		'{"name":"%s","ref":"%s","version":"%s"}' "$1" "$2" "$3")"
@@ -546,17 +577,15 @@ decide flatcar-zfs-sysext "${sysext_flatcar}-zfs${sysext_zfs}"
 
 # --------------------------------------------------------------- oci mirrors
 # zstd:chunked repacks of upstream platform images. scripts/oci-images.txt
-# lists "<name> <registry/repo> <source> <sed>" where <source> is a GitHub
-# repo ("latest" is its latest release tag transformed by <sed>; "-"/empty =
-# no transform), pin:<tag> for a literal pin, or "stack" — stack-governed
-# products whose deployable versions are declared per cloud in stacks.txt.
-# Stack-governed rows exist for repo lookup and force-dispatch only: their
-# cells emit solely from stacks.txt rows, so a held stack emits nothing.
-# Registry tag listings are unordered and paginated (ghcr caps
+# lists "<name> <registry/repo> <gh repo|pin:tag> <sed>": the resolved tag is
+# the upstream GitHub release tag transformed by <sed> ("-" or empty = no
+# transform), or a literal pin:<tag> for chart-pinned images with no release
+# source. Registry tag listings are unordered and paginated (ghcr caps
 # tags/list at 100 per page), so they can't resolve latest — the GH release
-# is the source of truth, and the tag is then probed on the registry. A fresh
-# upstream release whose image is not pushed yet is skipped until the next
-# run. A missing pinned tag fails the run.
+# is the source of truth. A GitHub release can precede (or skip) registry
+# promotion, so the newest release whose image is actually pushed wins; if
+# nothing recent is servable the product is skipped until the next run. A
+# missing pinned tag fails the run.
 # Output is a build matrix (all arches are handled in one skopeo copy).
 # Stack-declared pins from scripts/stacks.txt seed the matrix; the loop's
 # latest-resolution cells skip any name:version a stack already queued.
@@ -565,6 +594,9 @@ oci_names=
 oci_build=false
 [ -n "$oci_matrix" ] && oci_build=true
 oci_matched_force=false
+# Resolution probes the registry for every row, so skopeo is needed before
+# the loop (the stacks section only ensures it when stacks.txt has rows).
+ensure_cmds skopeo
 while read -r oci_name oci_repo oci_gh oci_sed || [ -n "$oci_name" ]; do
 	case "$oci_name" in '' | '#'*) continue ;; esac
 	case " $oci_names " in
@@ -588,37 +620,6 @@ while read -r oci_name oci_repo oci_gh oci_sed || [ -n "$oci_name" ]; do
 	pinned=false
 	if [ "$oci_name" = "$force_oci_name" ] && [ -n "$force_oci_tag" ]; then
 		oci_tag=$force_oci_tag
-	elif [ "$oci_gh" = stack ]; then
-		# Stack-governed: deployable versions are declared per cloud in
-		# stacks.txt and cells emit solely from those rows — a held stack
-		# emits nothing, which is the point of the atomic gate. The row
-		# exists for repo lookup and force-dispatch.
-		awk -v n="oci-$oci_name" -v u="$oci_name" \
-			'NF>=3 && ($2 == n || (u == "k3s-upgrade" && $2 == "k3s")) { f=1 }
-			 END { exit !f }' "$stacks_file" || {
-			echo "check.sh: warning: stack-governed oci-$oci_name has no stacks.txt rows — it never builds" >&2
-		}
-		if [ "$forced" != true ]; then
-			echo "oci-$oci_name: governed by stacks.txt"
-			continue
-		fi
-		# Bare force on a stack product: rebuild every declared tag upstream
-		# still serves — released status doesn't apply under force.
-		ensure_cmds skopeo
-		emitted=false
-		while read -r _st st_prod st_tag _; do
-			case "$_st" in '' | '#'*) continue ;; esac
-			case "$st_prod" in
-			"oci-$oci_name") ;;
-			k3s) [ "$oci_name" = k3s-upgrade ] || continue
-				st_tag=$(printf '%s' "$st_tag" | tr '+' '-') ;;
-			*) continue ;;
-			esac
-			emit_oci "$oci_name" "$oci_repo:$st_tag" "${st_tag#v}" && emitted=true
-		done <"$stacks_file"
-		[ "$emitted" = true ] ||
-			echo "oci-$oci_name: no servable stacks.txt tags" >&2
-		continue
 	else
 		case "$oci_gh" in
 		pin:*)
@@ -627,7 +628,15 @@ while read -r oci_name oci_repo oci_gh oci_sed || [ -n "$oci_name" ]; do
 			oci_tag=${oci_gh#pin:}
 			pinned=true ;;
 		*)
-			oci_tag=$(latest_gh "$oci_gh" "$oci_sed") ;;
+			oci_tag=$(latest_eligible_oci "$oci_gh" "$oci_sed" "$oci_repo")
+			[ -n "$oci_tag" ] || {
+				if [ "$oci_name" = "$force_oci_name" ]; then
+					echo "check.sh: no servable tag in recent $oci_gh releases" >&2
+					exit 1
+				fi
+				echo "oci-$oci_name: no servable tag in recent $oci_gh releases — skipping"
+				continue
+			} ;;
 		esac
 	fi
 	oci_ver="${oci_tag#v}"

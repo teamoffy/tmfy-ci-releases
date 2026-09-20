@@ -26,8 +26,8 @@ on:
           libgit2: libgit2/libssh2 e.g. 1.9.7/1.11.1
           llama-embedding: bNNNN e.g. b10819
           oci-mirror: name:tag from oci-images.txt e.g. cilium:v1.20.1
-          oci-<name>: the image tag e.g. v1.20.1 (empty = every declared tag:
-          the stacks.txt rows for stack-governed images, the pin otherwise)
+          oci-<name>: the image tag e.g. v1.20.1 (empty = newest servable
+          upstream release)
           flatcar-zfs-sysext: flatcar/zfs e.g. 4593.2.5/2.4.4
           ci-tools or <tool name>: the upstream tag e.g. kubectl:v1.36.4
           (empty ci-tools rebuilds every tool in ci-tools.txt at latest)
