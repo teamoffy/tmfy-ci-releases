@@ -152,8 +152,12 @@ if [ -d "${STAGE}/lib/modules" ]; then
   cp -a "${STAGE}/lib/modules/." "${STAGE}/usr/lib/modules/"
   rm -rf "${STAGE}/lib"
 fi
+# Flatcar's module install hook compresses modules with xz. Accept both that
+# output and the uncompressed form used by some kernel configurations.
 [ -f "${STAGE}/usr/lib/modules/${KVER}/extra/zfs.ko" ] \
+  || [ -f "${STAGE}/usr/lib/modules/${KVER}/extra/zfs.ko.xz" ] \
   || [ -f "${STAGE}/usr/lib/modules/${KVER}/extra/zfs/zfs.ko" ] \
+  || [ -f "${STAGE}/usr/lib/modules/${KVER}/extra/zfs/zfs.ko.xz" ] \
   || { echo "zfs.ko was not produced under /usr/lib/modules/${KVER}/extra" >&2; exit 1; }
 
 echo "$KVER" > /tmp/kver

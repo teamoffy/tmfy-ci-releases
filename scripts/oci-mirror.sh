@@ -45,8 +45,18 @@ upstream_digest=$(sha256_of "$raw")
 # TOC annotations.
 entry="oci-$name-$version"
 layout="$work/stage/$entry"
-skopeo copy --all --dest-compress-format zstd:chunked --dest-compress-level 19 \
-	--dest-force-compress-format "docker://$ref" "oci:$layout:$tag"
+attempt=1
+while :; do
+	rm -rf "$layout"
+	if skopeo copy --all --dest-compress-format zstd:chunked --dest-compress-level 19 \
+		--dest-force-compress-format "docker://$ref" "oci:$layout:$tag"; then
+		break
+	fi
+	[ "$attempt" -lt 3 ] || exit 1
+	attempt=$((attempt + 1))
+	echo "oci-mirror.sh: copy failed; retrying ($attempt/3)" >&2
+	sleep 5
+done
 
 # Verify the layout: exactly one top-level manifest, and every image manifest
 # below it has only chunked zstd layers. Non-image children (attestation
