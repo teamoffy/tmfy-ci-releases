@@ -1365,7 +1365,7 @@ jobs:
           $NAME $TAG upstream downloads, verified and repacked as max-zstd (level 22) tar.zst for linux-x64 and linux-arm64.
 
           - Upstream: https://github.com/$REPO/releases/tag/$TAG
-          - Verified: each downloaded file against its upstream checksum — the GitHub asset digest for github.com downloads, or the published .sha256/.sha256sum sidecar otherwise.
+          - Verified: each downloaded file against its upstream checksum — the GitHub asset digest for github.com downloads, or the published .sha256/.sha256sum sidecar or per-directory SHASUMS256.txt/sha256sums.txt otherwise.
           - Layout: $layout — \`tar --zstd -xf <asset>\` needs zstd (preinstalled on GitHub runner images)
           - Verify: \`sha256sum -c SHA256SUMS.txt\`
           - License: see the upstream repository

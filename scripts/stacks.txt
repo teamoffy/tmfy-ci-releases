@@ -36,6 +36,7 @@ upcloud oci-tetragon v1.7.1
 upcloud oci-kured 1.23.0
 upcloud oci-vector 0.58.0-distroless-libc
 upcloud oci-local-volume-provisioner v2.9.0
+upcloud oci-zfs-driver 2.11.1
 
 # -------------------------------------------------------------------- gcp
 # Held at 1.36: the cloud-provider-gcp CCM minor tracks the k8s minor and no
@@ -60,6 +61,7 @@ gcp oci-tetragon v1.7.1
 gcp oci-kured 1.23.0
 gcp oci-vector 0.58.0-distroless-libc
 gcp oci-local-volume-provisioner v2.9.0
+gcp oci-zfs-driver 2.11.1
 
 # -------------------------------------------------------------- alicloud
 alicloud k3s v1.37.0+k3s1
@@ -81,3 +83,4 @@ alicloud oci-tetragon v1.7.1
 alicloud oci-kured 1.23.0
 alicloud oci-vector 0.58.0-distroless-libc
 alicloud oci-local-volume-provisioner v2.9.0
+alicloud oci-zfs-driver 2.11.1

@@ -5,8 +5,10 @@
 #
 # Verification: github.com release downloads are checked against the asset's
 # GitHub-recorded sha256 digest; other URLs against a <url>.sha256 or
-# <url>.sha256sum sidecar. A tool with neither fails the build — mirrors here
-# are verified, matching the pins tea keeps in downloads.sha256.
+# <url>.sha256sum sidecar, or a per-directory SHASUMS256.txt/sha256sums.txt
+# listing every asset (nodejs.org's convention). A tool with none of these
+# fails the build — mirrors here are verified, matching the pins tea keeps in
+# downloads.sha256.
 #
 # usage: tool-repack.sh <name> <tag>     e.g. kubectl v1.37.0
 # env:
@@ -77,6 +79,17 @@ expected_sha() { # <url> <basename> -> upstream sha256 (required)
 			if side=$(curl -fsSL --retry 3 --max-time 20 "$1$suffix" 2>/dev/null); then
 				printf '%s\n' "$side" | awk '{print $1; exit}'
 				return 0
+			fi
+		done
+		# Some hosts publish one digest file per directory listing every
+		# asset (nodejs.org's SHASUMS256.txt) instead of per-file sidecars.
+		for sums in SHASUMS256.txt sha256sums.txt; do
+			if side=$(curl -fsSL --retry 3 --max-time 20 "${1%/*}/$sums" 2>/dev/null); then
+				sha=$(printf '%s\n' "$side" | awk -v f="$2" '$NF == f {print $1; exit}')
+				[ -z "$sha" ] || {
+					printf '%s\n' "$sha"
+					return 0
+				}
 			fi
 		done
 		printf '\n' ;;

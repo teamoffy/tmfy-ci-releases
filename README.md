@@ -69,14 +69,17 @@ Two products exist because every cluster node downloads them at boot:
 
 ## CI tools
 
-`ci-tools.txt` drives verified mirrors of the small public binaries the
-platform pins by sha256 (hadolint, osv-scanner, kubectl, helm, yq, pulumi,
-aliyun-cli, upctl, actions-runner). Each tool gets its own `<name>/v<version>`
-release with `linux-x64`/`linux-arm64` tar.zst assets staging
-`usr/local/bin/<tool>` or `opt/<name>/`. Downloads are checked against the
-GitHub asset digest, or the upstream `.sha256`/`.sha256sum` sidecar for
-non-GitHub hosts (kubectl, helm). One release per tool means each tracks its own latest
-independently; the whole set force-rebuilds via `product=ci-tools`.
+`ci-tools.txt` drives verified mirrors of the public binaries and toolchains
+the platform pins by sha256 (hadolint, osv-scanner, kubectl, helm, yq, pulumi,
+aliyun-cli, upctl, actions-runner, node). Each tool gets its own
+`<name>/v<version>` release with `linux-x64`/`linux-arm64` tar.zst assets
+staging `usr/local/bin/<tool>` or `opt/<name>/`. `node` tracks nodejs.org's
+newest LTS point release — GitHub's latest is the Current line — and lands in
+`opt/node/`. Downloads are checked against the GitHub asset digest, the
+upstream `.sha256`/`.sha256sum` sidecar for non-GitHub hosts (kubectl, helm),
+or a per-directory `SHASUMS256.txt` (nodejs.org). One release per tool means
+each tracks its own latest independently; the whole set force-rebuilds via
+`product=ci-tools`.
 
 ## OCI image mirrors
 

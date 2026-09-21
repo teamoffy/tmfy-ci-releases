@@ -102,6 +102,21 @@ latest_gh() { # <owner/repo> <sed expr>
 	gh api "repos/$1/releases/latest" --jq '.tag_name' | sed "$2"
 }
 
+# tool_latest <repo> — upstream tag a ci-tools.txt row builds. "Latest" is
+# the repo's latest GitHub release, except repos whose newest release line
+# isn't what we ship: nodejs/node's latest is the Current line, not LTS.
+tool_latest() {
+	case "$1" in
+	nodejs/node)
+		# dist/index.json is newest-first; first entry with an lts codename
+		# is the current LTS point release.
+		ensure_cmds curl jq
+		curl -fsSL --retry 3 --max-time 20 https://nodejs.org/dist/index.json |
+			jq -r '[.[] | select(.lts != false)][0].version' ;;
+	*) latest_gh "$1" 's/$//' ;;
+	esac
+}
+
 # List all release tags once up front: a per-tag lookup can't distinguish
 # "missing" from an API error, and a spurious build would replace good assets.
 existing_tags=$(gh api "repos/$repo/releases?per_page=100" --paginate --jq '.[].tag_name')
@@ -670,7 +685,8 @@ printf 'oci_build=%s\noci_matrix={"include":[%s]}\n' "$oci_build" "$oci_matrix" 
 # Verified mirrors of small public binaries that tea pins by
 # sha256 in downloads.sha256 / @moffy/versions. ci-tools.txt lists
 # "<name> <gh-repo> <x64-url> <arm64-url> <mode>"; latest is the repo's GitHub
-# latest release. Output is a build matrix, one cell per missing tool.
+# latest release (tool_latest() — nodejs/node resolves to the newest LTS line).
+# Output is a build matrix, one cell per missing tool.
 tools_file="$script_dir/ci-tools.txt"
 tools_matrix=
 tools_names=
@@ -697,7 +713,7 @@ while read -r tool_name tool_repo tool_u64 tool_ua64 tool_mode || [ -n "$tool_na
 	elif [ "$force_all_tools" = true ]; then
 		forced=true
 	fi
-	[ -n "$tool_tag" ] || tool_tag=$(latest_gh "$tool_repo" 's/$//')
+	[ -n "$tool_tag" ] || tool_tag=$(tool_latest "$tool_repo")
 	tool_ver="${tool_tag#v}"
 	if [ "$forced" = true ] ||
 		! printf '%s\n' "$existing_tags" | grep -qxF "$tool_name/v$tool_ver"; then
