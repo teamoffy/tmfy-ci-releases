@@ -99,11 +99,16 @@ target, so bump them deliberately via a forced version.
 - `ci-tools.txt` — tracked tools: `<name> <gh-repo> <x64-url> <arm64-url>
   <mode>` per line. `{tag}`/`{ver}` expand in the URLs; `mode` is `bin` (bare
   binary), `tarbin:<member>` (one binary out of an archive), or `tardir`
-  (whole archive to `opt/<name>`).
+  (whole archive to `opt/<name>`). The version source is `<gh-repo>`'s latest
+  GitHub release, except `nodejs/node`, which resolves to the newest LTS point
+  release from nodejs.org's `dist/index.json` (its GitHub latest is the
+  Current line) — see `tool_latest` in `check.sh`.
 - `tool-repack.sh <name> <tag>` — fetch + verify + repack one ci-tools.txt row
   into `linux-x64`/`linux-arm64` tar.zst assets plus `release-info.env`.
   GitHub-hosted assets verify via the asset digest; other hosts via the
-  `.sha256`/`.sha256sum` sidecar. Takes `CI_TOOLS_WORK`, `GH_TOKEN`.
+  `.sha256`/`.sha256sum` sidecar or a per-directory
+  `SHASUMS256.txt`/`sha256sums.txt` (nodejs.org's convention). Takes
+  `CI_TOOLS_WORK`, `GH_TOKEN`.
 - `<product>-build.sh <version>...` — build, smoke-test, and pack one product.
   The mirrors use `*-repack.sh` instead (`bun-repack.sh`, `sqlite-vec-repack.sh`,
   `llama-embedding-repack.sh`): they verify upstream checksums where published

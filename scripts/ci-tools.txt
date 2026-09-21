@@ -3,7 +3,9 @@
 #
 # columns:
 #   name          product/tool name ([a-z0-9-]+)
-#   gh-repo       owner/repo whose latest release is the version source
+#   gh-repo       owner/repo whose latest release is the version source;
+#                 nodejs/node is special-cased to the newest LTS line (see
+#                 tool_latest in check.sh — its GH latest is the Current line)
 #   url-x64       download URL for the linux-x64 asset ("-" to skip that arch)
 #   url-arm64     same for linux-arm64
 #   mode          bin              — URL is the bare binary -> usr/local/bin/<name>
@@ -14,7 +16,8 @@
 #
 # URLs expand {tag} = upstream tag, {ver} = tag without a leading v.
 # Verification: github.com release URLs are checked against the asset's GitHub
-# digest; other hosts need a <url>.sha256 (or .sha256sum) sidecar.
+# digest; other hosts need a <url>.sha256/.sha256sum sidecar or a per-directory
+# SHASUMS256.txt/sha256sums.txt covering the asset.
 #
 hadolint       hadolint/hadolint      https://github.com/hadolint/hadolint/releases/download/{tag}/hadolint-linux-x86_64                        https://github.com/hadolint/hadolint/releases/download/{tag}/hadolint-linux-arm64                        bin
 osv-scanner    google/osv-scanner     https://github.com/google/osv-scanner/releases/download/{tag}/osv-scanner_linux_amd64                   https://github.com/google/osv-scanner/releases/download/{tag}/osv-scanner_linux_arm64                  bin
@@ -25,3 +28,4 @@ pulumi         pulumi/pulumi          https://github.com/pulumi/pulumi/releases/
 aliyun-cli     aliyun/aliyun-cli      https://github.com/aliyun/aliyun-cli/releases/download/{tag}/aliyun-cli-linux-{ver}-amd64.tgz           https://github.com/aliyun/aliyun-cli/releases/download/{tag}/aliyun-cli-linux-{ver}-arm64.tgz            tarbin:aliyun
 upctl          UpCloudLtd/upcloud-cli https://github.com/UpCloudLtd/upcloud-cli/releases/download/{tag}/upcloud-cli_{ver}_linux_x86_64.tar.gz https://github.com/UpCloudLtd/upcloud-cli/releases/download/{tag}/upcloud-cli_{ver}_linux_arm64.tar.gz   tarbin:upctl
 actions-runner actions/runner         https://github.com/actions/runner/releases/download/{tag}/actions-runner-linux-x64-{ver}.tar.gz        https://github.com/actions/runner/releases/download/{tag}/actions-runner-linux-arm64-{ver}.tar.gz       tardir
+node           nodejs/node            https://nodejs.org/dist/{tag}/node-{tag}-linux-x64.tar.gz                                             https://nodejs.org/dist/{tag}/node-{tag}-linux-arm64.tar.gz                                            tardir
