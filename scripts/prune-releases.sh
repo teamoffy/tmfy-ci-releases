@@ -1,10 +1,10 @@
 #!/bin/sh
 # Prune releases beyond the newest KEEP_RELEASES per product.
 # usage: prune-releases.sh
-# env: GH_TOKEN, GITHUB_REPOSITORY, KEEP_RELEASES (default 15)
+# env: GH_TOKEN, GITHUB_REPOSITORY, KEEP_RELEASES (default 45)
 set -eu
 repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}"
-keep="${KEEP_RELEASES:-15}"
+keep="${KEEP_RELEASES:-45}"
 products='aws-lc bun graalvm zlib-ng postgres valkey clickhouse pebble typesense zstd libgit2 sqlite-vec llama-embedding k3s k3s-system flatcar flatcar-zfs-sysext'
 
 # oci image mirrors and ci-tools derive their product names from the tracked

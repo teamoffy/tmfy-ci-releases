@@ -1545,7 +1545,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      KEEP_RELEASES: "15"
+      KEEP_RELEASES: "45"
     steps:
       - name: Clone the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

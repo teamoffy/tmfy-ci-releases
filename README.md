@@ -4,7 +4,7 @@ Prebuilt dependencies for CI pipelines, published as GitHub release assets.
 [`release.yml`](.github/workflows/release.yml) runs daily (06:17 UTC), checks each
 product's upstream for a new version, and builds, smoke-tests, and publishes
 anything not yet released here. Product jobs run in parallel, and a failed
-target does not cancel the other targets in its matrix. The newest 15 releases
+target does not cancel the other targets in its matrix. The newest 45 releases
 per product are kept.
 
 ## Products

@@ -22,7 +22,7 @@ One workflow ([`release.yml`](.github/workflows/release.yml)), one daily run
 3. **release-\<product\>** — assembles `SHA256SUMS.txt` and publishes the
    release with notes (upstream URLs/checksums, build recipe, license).
 4. **cleanup** — prunes each product's releases beyond the newest
-   `KEEP_RELEASES` (15) so fallback versions survive if automation stalls;
+   `KEEP_RELEASES` (45) so fallback versions survive if automation stalls;
    set to `1` for strictly latest-only.
 
 ## Force-rebuilding a version
@@ -136,7 +136,7 @@ target, so bump them deliberately via a forced version.
   publish (notes on stdin). Every regular file in the assets dir ships, so
   mirrors can publish upstream artifacts verbatim; sidecars (`upstream-*`,
   `*.sha256`, `release-info.env`) are stripped before upload.
-- `prune-releases.sh` — keep-15 retention (`KEEP_RELEASES`).
+- `prune-releases.sh` — keep-45 retention (`KEEP_RELEASES`).
 - `lib.sh` — shared helpers (`fetch`, `fetch_flatcar`, `sha256_of`,
   `sha512_of`, `ensure_cmds`, `setup_linux_toolchain`, `verify_extract`).
   Sourced, never executed.
