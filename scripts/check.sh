@@ -10,6 +10,7 @@
 #                   valkey:   server/bloom     e.g. 9.1.2/1.0.1
 #                   libgit2:  libgit2/libssh2  e.g. 1.9.7/1.11.1
 #                   llama-embedding: bNNNN     e.g. b10819
+#                   graalvm:  must equal graalvm.txt's pin (GDS has no latest)
 #                   flatcar-zfs-sysext: flatcar/zfs  e.g. 4593.2.5/2.4.4
 #                   oci-mirror: <name>:<tag>   e.g. cilium:v1.20.1
 #                   oci-<name>: <tag>          e.g. product=oci-cilium
@@ -37,7 +38,7 @@ force_tool=
 force_tool_tag=
 force_all_tools=false
 case "$force_product" in
-"" | aws-lc | bun | zlib-ng | postgres | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext) ;;
+"" | aws-lc | bun | graalvm | zlib-ng | postgres | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext) ;;
 oci-mirror)
 	if [ -n "$force_version" ]; then
 		case "$force_version" in
@@ -222,6 +223,22 @@ decide aws-lc "$(force_or aws-lc "$(latest_gh aws/aws-lc 's/^v//')")"
 
 # ----------------------------------------------------------------------- bun
 decide bun "$(force_or bun "$(latest_gh oven-sh/bun 's/^bun-v//')")"
+
+# ------------------------------------------------------------------- graalvm
+# Oracle GDS exposes no "latest" — artifact ids are immutable per bundle and
+# pinned (with sha256s) in graalvm.txt, so the manifest IS the version source.
+# A forced version must equal it: repack can only build the pinned artifacts.
+graalvm_v=$(awk 'NF && $1 !~ /^#/ && $1 == "version" { print $2; exit }' \
+	"$script_dir/graalvm.txt")
+[ -n "$graalvm_v" ] || {
+	echo "check.sh: no version row in scripts/graalvm.txt" >&2
+	exit 1
+}
+if [ "$force_product" = graalvm ] && [ -n "$force_version" ] && [ "$force_version" != "$graalvm_v" ]; then
+	echo "check.sh: graalvm artifacts are pinned in graalvm.txt (currently $graalvm_v) — update the manifest to bump" >&2
+	exit 1
+fi
+decide graalvm "$graalvm_v"
 
 # ------------------------------------------------------------------- zlib-ng
 decide zlib-ng "$(force_or zlib-ng "$(latest_gh zlib-ng/zlib-ng 's/^v//')")"

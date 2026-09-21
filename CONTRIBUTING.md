@@ -3,7 +3,7 @@
 ## Pipeline
 
 One workflow ([`release.yml`](.github/workflows/release.yml)), one daily run
-(06:17 UTC), 38 jobs:
+(06:17 UTC), 40 jobs:
 
 1. **check** — resolves every product's target version from upstream (GitHub
    releases where they exist, git tags or index listings where they don't, and
@@ -33,6 +33,9 @@ daily check.
 `version` is optional (upstream latest if empty); multi-component products
 take slash-joined versions: postgres `18.6/2.29.2/0.8.6/1.1.1`, valkey
 `9.1.2/1.0.1`, libgit2 `1.9.7/1.11.1`, flatcar-zfs-sysext `4593.2.5/2.4.4`.
+graalvm accepts only its pinned version: the artifacts are pinned in
+[`graalvm.txt`](scripts/graalvm.txt) and a supplied version must equal that
+pin (GDS has no "latest" — bump the manifest to change versions).
 `oci-mirror` takes `<name>:<tag>` from
 [`oci-images.txt`](scripts/oci-images.txt) (e.g. `cilium:v1.20.1`), or force a
 single image directly with `product=oci-<name>` + `version=<tag>`; an empty
@@ -109,14 +112,23 @@ target, so bump them deliberately via a forced version.
   `.sha256`/`.sha256sum` sidecar or a per-directory
   `SHASUMS256.txt`/`sha256sums.txt` (nodejs.org's convention). Takes
   `CI_TOOLS_WORK`, `GH_TOKEN`.
+- `graalvm.txt` — pinned Oracle GraalVM for JDK bundles: one `version` row
+  plus `<platform> <gds-artifact-id> <sha256>` rows for linux-x64, linux-arm64,
+  and darwin-arm64. GDS exposes no "latest" and artifact ids are immutable, so
+  a version bump is a manifest edit; the `version` value names the release tag.
+- `graalvm-repack.sh <version>` — download each pinned GDS bundle, verify the
+  sha256 pin and the object-storage `opc-meta-content-sha256` header, restage
+  the JDK home as `home/` (flattening the macOS `Contents/Home` nesting), and
+  pack a tar.zst. Takes `GRAALVM_WORK`, `GRAALVM_PLATFORMS`.
 - `<product>-build.sh <version>...` — build, smoke-test, and pack one product.
-  The mirrors use `*-repack.sh` instead (`bun-repack.sh`, `sqlite-vec-repack.sh`,
-  `llama-embedding-repack.sh`): they verify upstream checksums where published
-  and re-archive rather than compile. sqlite-vec and llama-embedding repack on
-  each target's native runner so their smoke tests (loading `vec0`, running
-  `llama-cli`) exercise the packaged binaries. Multi-component products take
-  one arg per component (postgres 4, valkey 2, libgit2 2). Each
-  takes a `*_PLATFORM` env (e.g. `linux-x64`) and a `*_WORK` work dir.
+  The mirrors use `*-repack.sh` instead (`bun-repack.sh`, `graalvm-repack.sh`,
+  `sqlite-vec-repack.sh`, `llama-embedding-repack.sh`): they verify upstream
+  checksums where published and re-archive rather than compile. sqlite-vec and
+  llama-embedding repack on each target's native runner so their smoke tests
+  (loading `vec0`, running `llama-cli`) exercise the packaged binaries.
+  Multi-component products take one arg per component (postgres 4, valkey 2,
+  libgit2 2). Each takes a `*_PLATFORM` env (e.g. `linux-x64`) and a `*_WORK`
+  work dir.
 - `pack.sh <dir> <out.tar.zst> <entry> [zstd-level]` — tar.zst + sha256
   sidecar; level defaults to 22 (max), already-compressed payloads pass a
   low level.
@@ -144,7 +156,10 @@ What runs where:
   macOS with their smoke tests included. Bun repacks and verifies upstream's
   Linux and macOS zips on the Linux runner; sqlite-vec and llama-embedding
   repack upstream's binaries on each platform's native runner so their smoke
-  tests load `vec0` and run `llama-cli`.
+  tests load `vec0` and run `llama-cli`. GraalVM repacks the pinned GDS
+  bundles on the Linux runner for all three platforms — the repack is
+  platform-independent, and its post-pack check re-extracts `home/bin/java`
+  rather than executing the JDK.
 - **Published Linux-only targets** — postgres, valkey, clickhouse, pebble,
   typesense, libgit2, and flatcar-zfs-sysext. The first five and the sysext
   build reject non-Linux hosts; the sysext build additionally needs
