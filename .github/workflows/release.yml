@@ -15,8 +15,9 @@ on:
           aws-lc, bun, graalvm, zlib-ng, postgres, mysql, valkey, clickhouse,
           pebble, typesense, zstd, libgit2, sqlite-vec, llama-embedding,
           oci-mirror (or oci-<name>), k3s, k3s-system, flatcar,
-          flatcar-zfs-sysext, ci-tools (or a tool name from ci-tools.txt).
-          Empty = check every product for upstream updates.
+          flatcar-zfs-sysext, ci-tools (or a tool name from ci-tools.txt),
+          pulumi-plugins (or pulumi-plugin-<name>). Empty = check every
+          product for upstream updates.
         required: false
         type: string
       version:
@@ -36,6 +37,8 @@ on:
           flatcar-zfs-sysext: flatcar/zfs e.g. 4593.2.5/2.4.4
           ci-tools or <tool name>: the upstream tag e.g. kubectl:v1.36.4
           (empty ci-tools rebuilds every tool in ci-tools.txt at latest)
+          pulumi-plugins: no version (pins live in pulumi-plugins.txt);
+          pulumi-plugin-<name>: must equal the manifest pin
         required: false
         type: string
 
@@ -106,6 +109,9 @@ jobs:
       flatcar_zfs_sysext_build: ${{ steps.resolve.outputs.flatcar_zfs_sysext_build }}
       tools_matrix: ${{ steps.resolve.outputs.tools_matrix }}
       tools_build: ${{ steps.resolve.outputs.tools_build }}
+      pulumi_plugins_matrix: ${{ steps.resolve.outputs.pulumi_plugins_matrix }}
+      pulumi_plugins_images_matrix: ${{ steps.resolve.outputs.pulumi_plugins_images_matrix }}
+      pulumi_plugins_build: ${{ steps.resolve.outputs.pulumi_plugins_build }}
     steps:
       - name: Clone the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1514,6 +1520,76 @@ jobs:
           - License: see the upstream repository
           EOF
 
+  # --------------------------------------------------------- pulumi plugins
+  # Pinned Pulumi resource provider binaries: one build cell per (provider,
+  # platform), one release per provider. check.sh emits both matrices.
+  build-pulumi-plugins:
+    needs: check
+    if: needs.check.outputs.pulumi_plugins_build == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.check.outputs.pulumi_plugins_images_matrix) }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Repack provider
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULUMI_PLUGIN_PLATFORM: ${{ matrix.platform }}
+          PULUMI_PLUGIN_WORK: ${{ runner.temp }}/pulumi-plugin-work
+        run: sh scripts/pulumi-plugin-repack.sh "${{ matrix.name }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pulumi-plugin-${{ matrix.name }}-${{ matrix.platform }}
+          path: ${{ runner.temp }}/pulumi-plugin-work/out/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  release-pulumi-plugins:
+    needs: [check, build-pulumi-plugins]
+    if: needs.check.outputs.pulumi_plugins_build == 'true' && needs.build-pulumi-plugins.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.check.outputs.pulumi_plugins_matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: pulumi-plugin-${{ matrix.name }}-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          shas=$(cat assets/upstream-sha256-*.txt)
+          sh scripts/publish-release.sh "pulumi-plugin-${{ matrix.name }}/v${{ matrix.version }}" "pulumi-plugin-${{ matrix.name }} ${{ matrix.version }}" assets <<EOF
+          Pulumi \`${{ matrix.name }}\` provider plugin ${{ matrix.version }}, repacked from the upstream release tarball as max-zstd (level 22) tar.zst for linux-x64, linux-arm64, and darwin-arm64.
+
+          - Upstream: https://github.com/${{ matrix.repo }}/releases/tag/v${{ matrix.version }}
+          - Verified: each downloaded tarball against its GitHub asset digest.
+          - Layout: extract at \`/\` — \`pulumi-resource-${{ matrix.name }}\` lands in \`/usr/local/bin\`; Pulumi loads the plugin from \`\$PULUMI_HOME/plugins/resource-${{ matrix.name }}-v${{ matrix.version }}/pulumi-resource-${{ matrix.name }}\`.
+          - Upstream sha256 (verified via the GitHub asset digest):
+          ${shas}
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - License: see the upstream repository
+          EOF
+
   # ---------------------------------------------------------- oci mirrors
   # One matrix cell per image: skopeo re-encodes every published arch to
   # zstd:chunked in a single copy, so there is no separate platform matrix.
@@ -1608,6 +1684,7 @@ jobs:
         release-flatcar,
         release-flatcar-zfs-sysext,
         release-ci-tools,
+        release-pulumi-plugins,
         release-oci-mirror,
       ]
     if: ${{ !cancelled() }}

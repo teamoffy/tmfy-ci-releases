@@ -3,14 +3,15 @@
 ## Pipeline
 
 One workflow ([`release.yml`](.github/workflows/release.yml)), one run every
-2nd day (06:17 UTC), 42 jobs:
+2nd day (06:17 UTC), 44 jobs:
 
 1. **check** — resolves every product's target version from upstream (GitHub
    releases where they exist, git tags or index listings where they don't, and
    the Flatcar channel's `version.txt`) and decides whether that version is
    already released here. For the `oci-*` image mirrors it also probes each
-   resolved tag on its registry, and for `oci-*`, `k3s`, `k3s-system`, and the
-   `ci-tools.txt` tools it emits a dynamic build matrix of what's missing.
+   resolved tag on its registry, and for `oci-*`, `k3s`, `k3s-system`, the
+   `ci-tools.txt` tools, and `pulumi-plugins.txt` it emits a dynamic build
+   matrix of what's missing.
    It also checks [`stacks.txt`](scripts/stacks.txt). A stack is added to the
    build matrices only when all of its pinned versions are available upstream
    or already released here. Scheduled runs only mirror upstream releases at
@@ -45,8 +46,11 @@ pin (GDS has no "latest" — bump the manifest to change versions).
 single image directly with `product=oci-<name>` + `version=<tag>`; an empty
 version rebuilds every image at its newest servable tag. `ci-tools` works the same
 way over [`ci-tools.txt`](scripts/ci-tools.txt) — `product=ci-tools` +
-`version=<name>:<tag>` or `product=<tool name>` + `version=<tag>`. From the
-Actions tab, or:
+`version=<name>:<tag>` or `product=<tool name>` + `version=<tag>`.
+`pulumi-plugins` rebuilds every pin in
+[`pulumi-plugins.txt`](scripts/pulumi-plugins.txt);
+`product=pulumi-plugin-<name>` rebuilds one, and a `version` input must equal
+the manifest pin. From the Actions tab, or:
 
 ```sh
 gh workflow run release.yml -f product=zstd -f version=1.5.7
@@ -116,6 +120,17 @@ target, so bump them deliberately via a forced version.
   `.sha256`/`.sha256sum` sidecar or a per-directory
   `SHASUMS256.txt`/`sha256sums.txt` (nodejs.org's convention). Takes
   `CI_TOOLS_WORK`, `GH_TOKEN`.
+- `pulumi-plugins.txt` — pinned Pulumi resource provider binaries:
+  `<name> <version> <gh-repo>` per line. The manifest is the version source
+  (bump it to mirror a new provider version); `check.sh` emits a per-(provider,
+  platform) build matrix for the missing releases. Verified against the
+  upstream GitHub asset digest.
+- `pulumi-plugin-repack.sh <name>` — fetch, verify, and repack one provider's
+  upstream tarball for `PULUMI_PLUGIN_PLATFORM`
+  (`linux-x64`|`linux-arm64`|`darwin-arm64`) into
+  `pulumi-plugin-<name>-<version>-<platform>.tar.zst`, staging
+  `pulumi-resource-<name>` at `usr/local/bin/`. Takes `PULUMI_PLUGIN_WORK`,
+  `GH_TOKEN`.
 - `graalvm.txt` — pinned Oracle GraalVM for JDK bundles: one `version` row
   plus `<platform> <gds-artifact-id> <sha256>` rows for linux-x64, linux-arm64,
   and darwin-arm64. GDS exposes no "latest" and artifact ids are immutable, so
@@ -164,7 +179,9 @@ What runs where:
   tests load `vec0` and run `llama-cli`. GraalVM repacks the pinned GDS
   bundles on the Linux runner for all three platforms — the repack is
   platform-independent, and its post-pack check re-extracts `home/bin/java`
-  rather than executing the JDK.
+  rather than executing the JDK. The `pulumi-plugin-*` repack is
+  platform-independent too: it verifies and re-archives upstream's per-platform
+  tarballs on the Linux runner.
 - **Published Linux-only targets** — postgres, mysql, valkey, clickhouse,
   pebble, typesense, libgit2, and flatcar-zfs-sysext. The first six and the
   sysext build reject non-Linux hosts; the sysext build additionally needs

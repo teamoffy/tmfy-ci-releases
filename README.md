@@ -33,6 +33,7 @@ matrix. The newest 45 releases per product are kept.
 | flatcar | [Flatcar stable channel](https://www.flatcar.org/releases/) | verbatim upstream files, amd64 + arm64 | — |
 | flatcar-zfs-sysext | Flatcar stable + [openzfs/zfs](https://github.com/openzfs/zfs) | squashfs `.raw`, amd64 + arm64 | `/etc/extensions` |
 | ci-tools | see [`ci-tools.txt`](scripts/ci-tools.txt) | linux-x64, linux-arm64 | `usr/local/bin`, `opt/` |
+| `pulumi-plugin-<name>` | Pulumi resource providers pinned in [`pulumi-plugins.txt`](scripts/pulumi-plugins.txt) | linux-x64, linux-arm64, darwin-arm64 | `usr/local/bin` |
 
 Version tracking:
 
@@ -49,6 +50,9 @@ Version tracking:
   immutable per bundle, so the version and per-platform sha256 pins live in
   [`graalvm.txt`](scripts/graalvm.txt) — a bump is a manifest edit followed by
   a forced `graalvm` rebuild.
+- **pulumi-plugin-<name>** versions are pinned in
+  [`pulumi-plugins.txt`](scripts/pulumi-plugins.txt) — a bump is a manifest
+  edit, and the next run mirrors the missing release.
 
 ## Mirrored node boot artifacts
 
@@ -90,6 +94,19 @@ upstream `.sha256`/`.sha256sum` sidecar for non-GitHub hosts (kubectl, helm),
 or a per-directory `SHASUMS256.txt` (nodejs.org). One release per tool means
 each tracks its own latest independently; the whole set force-rebuilds via
 `product=ci-tools`.
+
+## Pulumi provider plugins
+
+`pulumi-plugins.txt` pins the Pulumi resource provider binaries the deployments
+use, one row per provider (`<name> <version> <gh-repo>`). Each upstream release
+tarball (`pulumi-resource-<name>-v<version>-<os>-<arch>.tar.gz`) is verified
+against its GitHub asset digest and repacked as max-zstd (level 22) tar.zst for
+linux-x64, linux-arm64, and darwin-arm64; the binary is staged at
+`usr/local/bin/`, so extract at `/`. Releases are
+`pulumi-plugin-<name>/v<version>`. Versions are pinned, not tracked: a provider
+bump edits the manifest and the next run builds the missing release. Several
+SDKs share one provider plugin — the CRD extension SDKs all use `kubernetes` —
+so they resolve to that single release.
 
 ## OCI image mirrors
 
