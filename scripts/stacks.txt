@@ -84,3 +84,28 @@ alicloud oci-kured 1.23.0
 alicloud oci-vector 0.58.0-distroless-libc
 alicloud oci-local-volume-provisioner v2.9.0
 alicloud oci-zfs-driver 2.11.1
+
+# ------------------------------------------------------------------ oci
+# Held at 1.36: newest OCI CCM is v1.35.0, and a cloud-controller-manager may
+# trail the apiserver by at most one minor — bump the k3s row and the CCM row
+# together when a v36 image lands. cloud-provider-oci is the CCM and CSI
+# driver in one image, so no separate CSI row is needed.
+oci k3s v1.36.4+k3s1
+oci oci-kuberlr-kubectl v8.1.2
+oci oci-system-upgrade-controller v0.20.1
+oci oci-oci-ccm v1.35.0
+oci oci-csi-provisioner v6.3.0
+oci oci-csi-attacher v4.13.0
+oci oci-csi-resizer v2.2.1
+oci oci-csi-snapshotter v8.6.0
+oci oci-snapshot-controller v8.6.0
+oci oci-csi-node-driver-registrar v2.18.0
+oci oci-livenessprobe v2.20.0
+oci oci-cilium v1.20.2
+oci oci-cilium-operator v1.20.2
+oci oci-cilium-envoy v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82
+oci oci-tetragon v1.7.1
+oci oci-kured 1.23.0
+oci oci-vector 0.58.0-distroless-libc
+oci oci-local-volume-provisioner v2.9.0
+oci oci-zfs-driver 2.11.1

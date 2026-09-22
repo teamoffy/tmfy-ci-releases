@@ -5,7 +5,7 @@
 set -eu
 repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}"
 keep="${KEEP_RELEASES:-45}"
-products='aws-lc bun graalvm zlib-ng postgres valkey clickhouse pebble typesense zstd libgit2 sqlite-vec llama-embedding k3s k3s-system flatcar flatcar-zfs-sysext'
+products='aws-lc bun graalvm zlib-ng postgres mysql valkey clickhouse pebble typesense zstd libgit2 sqlite-vec llama-embedding k3s k3s-system flatcar flatcar-zfs-sysext'
 
 # oci image mirrors and ci-tools derive their product names from the tracked
 # lists, so pruning stays in sync without a second copy of the names.

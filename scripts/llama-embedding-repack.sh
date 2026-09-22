@@ -2,7 +2,7 @@
 # Mirror llama.cpp's official per-platform binary tarball plus the pinned
 # EmbeddingGemma GGUF weights as tar.zst assets rooted at opt/llama-embedding
 # (extract at / to install into /opt/llama-embedding). One asset per platform
-# carries both, matching the codetel llama-embedding test fixture's layout:
+# carries both, matching the llama-embedding test fixture's layout:
 # native/ holds the llama.cpp libraries and tools, models/ the GGUF.
 # usage: llama-embedding-repack.sh <version>   # <version> is the bNNNN tag
 # env:

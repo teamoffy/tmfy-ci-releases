@@ -1,8 +1,8 @@
 #!/bin/sh
 # Mirror one Flatcar release artifact, byte-verbatim, verified against the
 # published .DIGESTS sidecar (sha512). Pin durability is the point: the channel
-# CDN drops old versions, while tea's pins (image imports, sysext inputs) keep
-# referencing them. Verbatim bytes keep the upstream sha512 valid.
+# CDN drops old versions, while downstream pins (image imports, sysext inputs)
+# keep referencing them. Verbatim bytes keep the upstream sha512 valid.
 #
 # The artifact set — which (arch, file) pairs upstream publishes — is the
 # build-flatcar matrix in release.yml; one matrix cell per artifact.

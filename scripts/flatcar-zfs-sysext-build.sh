@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build OpenZFS as a systemd-sysext image for one exact Flatcar release.
-# Ported from tea's build-flatcar-zfs-sysext.sh; downloads go through lib.sh.
+# Downloads go through lib.sh.
 #
 # Flatcar ships an immutable /usr, no package manager, and no ZFS module. The
 # only supported way to add an out-of-tree kernel module is a sysext: a

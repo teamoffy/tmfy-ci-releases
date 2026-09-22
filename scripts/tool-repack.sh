@@ -7,8 +7,7 @@
 # GitHub-recorded sha256 digest; other URLs against a <url>.sha256 or
 # <url>.sha256sum sidecar, or a per-directory SHASUMS256.txt/sha256sums.txt
 # listing every asset (nodejs.org's convention). A tool with none of these
-# fails the build — mirrors here are verified, matching the pins tea keeps in
-# downloads.sha256.
+# fails the build — every mirror here is verified.
 #
 # usage: tool-repack.sh <name> <tag>     e.g. kubectl v1.37.0
 # env:
