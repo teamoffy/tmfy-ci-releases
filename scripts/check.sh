@@ -21,6 +21,8 @@
 #                   pulumi-plugin-<name>:      product=pulumi-plugin-aws
 #                   (empty = the provider's latest release; a version input
 #                   builds that exact version)
+#                   stacks:                    product=stacks (republish the
+#                   resolved stacks release; takes no version)
 #   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT, GITHUB_EVENT_NAME
 #                   (schedule applies the 12h release bake-in window;
 #                   workflow_dispatch and local runs bypass it)
@@ -45,6 +47,7 @@ force_tool_tag=
 force_all_tools=false
 force_pulumi_plugin=
 force_all_pulumi_plugins=false
+force_stacks=false
 case "$force_product" in
 "" | aws-lc | bun | graalvm | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext) ;;
 oci-mirror)
@@ -87,6 +90,13 @@ pulumi-plugin-*)
 	# pulumi-plugin-<name> forces that provider; a version input builds that
 	# exact upstream release.
 	force_pulumi_plugin="${force_product#pulumi-plugin-}" ;;
+stacks)
+	# Force-republish the resolved stacks release.
+	if [ -n "$force_version" ]; then
+		echo "check.sh: product=stacks takes no version" >&2
+		exit 1
+	fi
+	force_stacks=true ;;
 *)
 	# ci-tools product names are dynamic: a manifest name forces that tool.
 	if manifest_names "$script_dir/ci-tools.txt" | grep -qx "$force_product"; then
@@ -200,6 +210,46 @@ latest_tag() {
 		break
 	done
 }
+
+# latest_release_matching <owner/repo> <tag-regex> <sed> — newest non-draft,
+# non-prerelease release whose tag matches <tag-regex> and clears the bake-in
+# window, transformed by <sed>. Empty when nothing matches; an API failure
+# aborts the run (a transient failure must not read as "no version").
+latest_release_matching() {
+	_lrm_json=$(gh api "repos/$1/releases?per_page=100") || {
+		echo "check.sh: failed to list releases for $1" >&2
+		exit 1
+	}
+	printf '%s\n' "$_lrm_json" | jq -r '
+		.[] | select((.draft | not) and (.prerelease | not) and .published_at)
+		| select('"$jq_aged"')
+		| .tag_name' | grep -E "$2" | sort -Vr | head -1 | sed "$3"
+}
+
+# registry_latest <registry/repo> <tag-regex> — newest tag on the registry
+# matching the regex, version-sorted. Version order, not push order: registry
+# listings are unordered and paginated.
+registry_latest() {
+	ensure_cmds skopeo jq
+	skopeo list-tags "docker://$1" 2>/dev/null |
+		jq -r '.Tags[]' | grep -E "$2" | sort -Vr | head -1
+}
+
+# cilium_envoy_tag <cilium-release-tag> — the cilium-envoy image tag cilium's
+# chart pins at that release (values.yaml). The `chart:cilium` source uses it
+# so the envoy mirror always matches the mirrored cilium.
+cilium_envoy_tag() {
+	curl -fsSL --retry 3 --max-time 30 \
+		"https://raw.githubusercontent.com/cilium/cilium/$1/install/kubernetes/cilium/values.yaml" |
+		sed -n '/repository: "quay.io\/cilium\/cilium-envoy"/{n; s/.*tag: *"\([^"]*\)".*/\1/p; q;}'
+}
+
+# minor_num/prev_minor/short_minor — k8s minor arithmetic: comparable number,
+# the previous minor, and the k8s minor without the leading "1." (1.36 -> 36).
+minor_num() { printf '%s\n' "$((${1%%.*} * 100 + ${1#*.}))"; }
+prev_minor() { printf '%s\n' "${1%%.*}.$((${1#*.} - 1))"; }
+short_minor() { printf '%s\n' "${1#1.}"; }
+esc_dots() { printf '%s' "$1" | sed 's/\./\\./g'; }
 
 # tool_latest <repo> — upstream tag a ci-tools.txt row builds. "Latest" is
 # the repo's latest GitHub release, except repos whose newest release line
@@ -563,24 +613,33 @@ k3s_system_forced_v=
 [ "$force_product" = k3s-system ] && k3s_system_forced_v=$k3s_system_v
 
 # ------------------------------------------------------------------ stacks
-# stacks.txt declares the k3s and image versions used by each cloud. Rows from
-# a stack are queued only when all of them already exist here or are available
-# upstream. Build and publication failures are still handled by their jobs.
+# stacks.txt declares each cloud's target Kubernetes version (a minor, or
+# `latest` for the newest minor k3s publishes); the deployed set (k3s plus
+# every in-scope oci-images.txt component) is computed from each row's source
+# and <k8s> rule, never pinned. A component that cannot supply the target
+# minor (e.g. no cloud-CCM image for it yet) drops the whole cloud one minor
+# and resolution retries, so a cloud never runs ahead of its slowest
+# dependency. Resolved sets seed the build matrices below and are published
+# as a content-addressed stacks release for consumers.
 stacks_file="$script_dir/stacks.txt"
 oci_file="$script_dir/oci-images.txt"
-oci_stack_cells=
+oci_work=$(mktemp -d "${TMPDIR:-/tmp}/oci-rows.XXXXXX")
+oci_matrix=
 oci_cell_keys=
+oci_build=false
+stacks_floor=30 # lowest k8s minor the resolver considers (1.30)
+stacks_base=${RUNNER_TEMP:-${TMPDIR:-/tmp}}
+stacks_dir="${stacks_base%/}/stacks-resolved"
+stacks_out="$stacks_dir/stacks.txt"
 
 awk '
 	/^[[:space:]]*(#|$)/ { next }
 	NF != 3 {
-		printf "check.sh: bad stacks.txt line %d: expected 3 fields\n", NR > "/dev/stderr"
+		printf "check.sh: bad stacks.txt line %d: expected <stack> k8s <minor>\n", NR > "/dev/stderr"
 		bad = 1
 		next
 	}
-	$1 !~ /^[a-z0-9][a-z0-9-]*$/ ||
-	$2 !~ /^(k3s|oci-[a-z0-9][a-z0-9-]*)$/ ||
-	$3 !~ /^[a-zA-Z0-9_][a-zA-Z0-9_.+-]*$/ {
+	$1 !~ /^[a-z0-9][a-z0-9-]*$/ || $2 != "k8s" || $3 !~ /^([0-9]+\.[0-9]+|latest)$/ {
 		printf "check.sh: bad stacks.txt line %d: %s %s %s\n", NR, $1, $2, $3 > "/dev/stderr"
 		bad = 1
 		next
@@ -588,101 +647,228 @@ awk '
 	{
 		key = $1 SUBSEP $2
 		if (seen[key]++) {
-			printf "check.sh: duplicate stacks.txt product at line %d: %s %s\n", NR, $1, $2 > "/dev/stderr"
+			printf "check.sh: duplicate stacks.txt declaration at line %d: %s\n", NR, $1 > "/dev/stderr"
 			bad = 1
 		}
 	}
 	END { exit bad }
 ' "$stacks_file"
 
-# Catch misspelled image products as configuration errors instead of holding
-# the affected stack forever.
-while read -r _s_stack _s_product _s_version; do
-	case "$_s_stack" in '' | '#'*) continue ;; esac
-	case "$_s_product" in
-	k3s) ;;
-	oci-*)
-		_s_name=${_s_product#oci-}
-		awk -v n="$_s_name" 'NF >= 4 && $1 == n { found = 1 } END { exit !found }' "$oci_file" || {
-			echo "check.sh: $_s_product in stacks.txt is not listed in oci-images.txt" >&2
-			exit 1
-		} ;;
-	esac
-done <"$stacks_file"
+# The component list the resolver works from: oci-images.txt rows. Registry
+# regexes carry no whitespace, so a plain read recovers the fields.
+awk '
+	/^[[:space:]]*(#|$)/ { next }
+	NF != 6 {
+		printf "check.sh: bad oci-images.txt line %d: expected 6 fields\n", NR > "/dev/stderr"
+		bad = 1
+		next
+	}
+	{
+		if (seen[$1]++) {
+			printf "check.sh: duplicate oci-images.txt name at line %d: %s\n", NR, $1 > "/dev/stderr"
+			bad = 1
+		}
+		print $1, $2, $3, $4, $5, $6
+	}
+	END { exit bad }
+' "$oci_file" >"$oci_work/rows" || exit 1
 
-stack_row_ok() { # <product> <tag> -> all required releases exist or can build
-	sver=${2#v}
-	case "$1" in
-	k3s)
-		upgrade_ver=$(printf '%s' "$sver" | tr '+' '-')
-		if printf '%s\n' "$existing_tags" | grep -qxF "k3s/v$sver" &&
-			printf '%s\n' "$existing_tags" | grep -qxF "k3s-system/v$sver" &&
-			printf '%s\n' "$existing_tags" | grep -qxF "oci-k3s-upgrade/v$upgrade_ver"; then
-			return 0
-		fi
-		gh api "repos/k3s-io/k3s/releases/tags/$2" >/dev/null 2>&1 &&
-			skopeo inspect --raw --retry-times 3 \
-				"docker://rancher/k3s-upgrade:$(printf '%s' "$2" | tr '+' '-')" \
-				>/dev/null 2>&1 ;;
-	oci-*)
-		printf '%s\n' "$existing_tags" | grep -qxF "$1/v$sver" && return 0
-		s_repo=$(awk -v n="${1#oci-}" 'NF>=4 && $1==n { print $2; exit }' "$oci_file")
-		[ -n "$s_repo" ] &&
-			skopeo inspect --raw --retry-times 3 \
-				"docker://$s_repo:$2" >/dev/null 2>&1 ;;
-	*) return 1 ;;
+# oci_resolve <registry-repo> <source> <sed> — newest image tag a row's
+# source can offer (empty when nothing is servable).
+oci_resolve() {
+	case "$2" in
+	pin:*) printf '%s\n' "${2#pin:}" ;;
+	registry:*) registry_latest "$1" "${2#registry:}" ;;
+	chart:cilium)
+		_or_cilium=$(oci_latest_tag cilium)
+		[ -n "$_or_cilium" ] || return 0
+		_or_tag=$_or_cilium
+		case "$_or_tag" in v*) ;; *) _or_tag="v$_or_tag" ;; esac
+		cilium_envoy_tag "$_or_tag" ;;
+	*)
+		_or_sed=$3
+		case "$_or_sed" in '' | -) _or_sed='s/$//' ;; esac
+		latest_eligible_oci "$2" "$_or_sed" "$1" ;;
 	esac
 }
 
-stacks=$(awk 'NF>=3 && $1!~/^#/ { print $1 }' "$stacks_file" | sort -u)
-[ -n "$stacks" ] && ensure_cmds gh skopeo
+# oci_latest_tag <name> — memoized oci_resolve for one oci-images.txt row.
+oci_latest_tag() {
+	_ol_name=$1
+	_ol_file="$oci_work/latest-$_ol_name"
+	if [ -f "$_ol_file" ]; then
+		cat "$_ol_file"
+		return 0
+	fi
+	# shellcheck disable=SC2046 # the row is space-separated fields
+	set -- $(awk -v n="$_ol_name" '$1 == n { print $2, $3, $4; exit }' "$oci_work/rows")
+	[ -n "${1:-}" ] || {
+		echo "check.sh: '$_ol_name' is not in oci-images.txt" >&2
+		exit 1
+	}
+	_ol_tag=$(oci_resolve "$1" "$2" "$3")
+	printf '%s\n' "$_ol_tag" >"$_ol_file"
+	printf '%s\n' "$_ol_tag"
+}
+
+# stack_minor_tag <registry-repo> <source> <sed> <rule> <minor> — newest tag
+# for a k8s-minor-coupled component (empty when the rule has nothing for the
+# minor, which steps the cloud down one minor).
+stack_minor_tag() {
+	case "$4" in
+	minor) _sm_re="^v$(esc_dots "$5")\\.[0-9]+$" ;;
+	minor-trail1) # dash cannot nest $() two levels deep in one string
+		_sm_prev=$(esc_dots "$(prev_minor "$5")")
+		_sm_re="^v($(esc_dots "$5")|$_sm_prev)\\.[0-9]+$" ;;
+	minor-short) _sm_re="^v$(short_minor "$5")\\.[0-9]+(\\.[0-9]+)+$" ;;
+	*) return 1 ;;
+	esac
+	case "$2" in
+	registry:*) registry_latest "$1" "$_sm_re" ;;
+	pin:*) printf '%s\n' "${2#pin:}" ;;
+	*)
+		_sm_sed=$3
+		case "$_sm_sed" in '' | -) _sm_sed='s/$//' ;; esac
+		latest_release_matching "$2" "$_sm_re" "$_sm_sed" ;;
+	esac
+}
+
+# resolve_cloud <stack> <target-minor> — newest minor at or below <target>
+# where k3s and every component resolves. Prints "k3s <version>" plus one
+# "<name> <tag>" row per oci component on success; returns 1 when nothing
+# resolves.
+resolve_cloud() {
+	_rs_file="$oci_work/resolved-$1"
+	_rs_minor=$2
+	while [ "$(minor_num "$_rs_minor")" -ge "$stacks_floor" ]; do
+		_rs_ok=true
+		_rs_k3s=$(latest_release_matching k3s-io/k3s \
+			"^v$(esc_dots "$_rs_minor")\.[0-9]+\+k3s[0-9]+$" 's/^v//')
+		[ -n "$_rs_k3s" ] || _rs_ok=false
+		: >"$_rs_file"
+		if [ "$_rs_ok" = true ]; then
+			while read -r _rs_name _rs_repo _rs_src _rs_sed _rs_rule _rs_scope; do
+				case "$_rs_scope" in
+				shared | "$1") ;;
+				*) continue ;;
+				esac
+				case "$_rs_rule" in
+				any) _rs_tag=$(oci_latest_tag "$_rs_name") ;;
+				*) _rs_tag=$(stack_minor_tag "$_rs_repo" "$_rs_src" "$_rs_sed" "$_rs_rule" "$_rs_minor") ;;
+				esac
+				[ -n "$_rs_tag" ] || {
+					_rs_ok=false
+					break
+				}
+				printf '%s %s\n' "$_rs_name" "$_rs_tag" >>"$_rs_file"
+			done <"$oci_work/rows"
+		fi
+		if [ "$_rs_ok" = true ]; then
+			printf 'k3s %s\n' "$_rs_k3s"
+			cat "$_rs_file"
+			return 0
+		fi
+		_rs_minor=$(prev_minor "$_rs_minor")
+	done
+	return 1
+}
+
+stacks=$(awk 'NF >= 3 && $1 !~ /^#/ { print $1 }' "$stacks_file" | sort -u)
+[ -n "$stacks" ] && ensure_cmds gh jq curl skopeo
+
+# A component's scope must be "shared" or one of the declared clouds; catch
+# typos as configuration errors instead of silently skipping the component.
+while read -r _sc_name _sc_repo _sc_src _sc_sed _sc_rule _sc_scope; do
+	case "$_sc_scope" in
+	shared) ;;
+	*)
+		printf '%s\n' "$stacks" | grep -qx "$_sc_scope" || {
+			echo "check.sh: oci-images.txt: $_sc_name has unknown scope '$_sc_scope'" >&2
+			exit 1
+		} ;;
+	esac
+done <"$oci_work/rows"
+
+mkdir -p "$stacks_dir"
+{
+	printf '# Resolved cloud stacks — generated by check.sh from the stacks.txt\n'
+	printf '# declarations and oci-images.txt rules; do not edit.\n'
+	printf '#\n#   <stack> <product> <version-or-tag>\n'
+} >"$stacks_out"
+stacks_published=false
 for stack in $stacks; do
-	held=
-	while read -r s_p s_v; do
-		stack_row_ok "$s_p" "$s_v" || held="$held $s_p=$s_v"
-	done <<-STACKROWS
-		$(awk -v s="$stack" 'NF>=3 && $1==s { print $2, $3 }' "$stacks_file")
-	STACKROWS
-	if [ -n "$held" ]; then
-		echo "stack $stack held; unavailable:$held" >&2
+	target=$(awk -v s="$stack" '$1 == s { print $3; exit }' "$stacks_file")
+	if [ "$target" = latest ]; then
+		# Newest k3s minor: the resolver steps down from there per component.
+		target=$(latest_gh k3s-io/k3s 's/^v//')
+		target=$(printf '%s' "$target" | sed 's/+.*//; s/\.[0-9]*$//')
+		[ -n "$target" ] || {
+			echo "check.sh: stack $stack: cannot resolve the newest k3s minor" >&2
+			exit 1
+		}
+	fi
+	if ! rows=$(resolve_cloud "$stack" "$target"); then
+		echo "check.sh: stack $stack: no k8s minor down to 1.$stacks_floor resolves (target $target)" >&2
 		continue
 	fi
-	echo "stack $stack: all versions available"
-	while read -r s_p s_v; do
-		sver=${s_v#v}
-		case "$s_p" in
-		k3s)
-			case " $k3s_candidates " in
-			*" $sver "*) ;;
-			*) k3s_candidates="$k3s_candidates $sver" ;;
-			esac
-			case " $k3s_system_candidates " in
-			*" $sver "*) ;;
-			*) k3s_system_candidates="$k3s_system_candidates $sver" ;;
-			esac
-			s_name=k3s-upgrade
-			s_repo=docker.io/rancher/k3s-upgrade
-			s_tag=$(printf '%s' "$s_v" | tr '+' '-')
-			sver=$(printf '%s' "$sver" | tr '+' '-') ;;
-		oci-*)
-			s_name=${s_p#oci-}
-			s_repo=$(awk -v n="$s_name" 'NF>=4 && $1==n { print $2; exit }' "$oci_file")
-			s_tag=$s_v ;;
-		*) continue ;;
+	k3s_ver=$(printf '%s\n' "$rows" | awk '$1 == "k3s" { print $2 }')
+	effective=$(printf '%s' "$k3s_ver" | sed 's/+.*//')
+	# Queue the resolved set; a component whose upstream artifact is not
+	# servable yet keeps its cell for a later run instead of failing.
+	pending=
+	while read -r s_name s_tag; do
+		[ "$s_name" = k3s ] && continue
+		s_repo=$(awk -v n="$s_name" '$1 == n { print $2; exit }' "$oci_work/rows")
+		s_ver=${s_tag#v}
+		printf '%s\n' "$existing_tags" | grep -qxF "oci-$s_name/v$s_ver" && continue
+		emit_oci "$s_name" "$s_repo:$s_tag" "$s_ver" || pending="$pending $s_name=$s_tag"
+	done <<-RESOLVED
+		$(printf '%s\n' "$rows" | grep -v '^k3s ')
+	RESOLVED
+	# k3s carries k3s-system and the oci-k3s-upgrade image at the same version.
+	case " $k3s_candidates " in
+	*" $k3s_ver "*) ;;
+	*) k3s_candidates="$k3s_candidates $k3s_ver" ;;
+	esac
+	case " $k3s_system_candidates " in
+	*" $k3s_ver "*) ;;
+	*) k3s_system_candidates="$k3s_system_candidates $k3s_ver" ;;
+	esac
+	k3s_upgrade_tag="v$(printf '%s' "$k3s_ver" | tr '+' '-')"
+	k3s_upgrade_ver=${k3s_upgrade_tag#v}
+	if ! printf '%s\n' "$existing_tags" | grep -qxF "oci-k3s-upgrade/v$k3s_upgrade_ver"; then
+		emit_oci k3s-upgrade "docker.io/rancher/k3s-upgrade:$k3s_upgrade_tag" "$k3s_upgrade_ver" ||
+			pending="$pending k3s-upgrade=$k3s_upgrade_tag"
+	fi
+	if [ -n "$pending" ]; then
+		echo "check.sh: stack $stack: k8s $effective (target $target), awaiting:$pending" >&2
+		continue
+	fi
+	echo "stack $stack: k8s $effective (target $target)"
+	printf '%s\n' "$rows" | while read -r s_name s_tag; do
+		case "$s_name" in
+		k3s) printf '%s k3s v%s\n' "$stack" "$s_tag" ;;
+		*) printf '%s oci-%s %s\n' "$stack" "$s_name" "$s_tag" ;;
 		esac
-		printf '%s\n' "$existing_tags" | grep -qxF "oci-$s_name/v$sver" && continue
-		case " $oci_cell_keys " in
-		*" $s_name:$sver "*) ;;
-		*)
-			oci_cell_keys="$oci_cell_keys $s_name:$sver"
-			oci_stack_cells="${oci_stack_cells:+$oci_stack_cells,}$(printf \
-				'{"name":"%s","ref":"%s","version":"%s"}' \
-				"$s_name" "$s_repo:$s_tag" "$sver")" ;;
-		esac
-	done <<-STACKROWS
-		$(awk -v s="$stack" 'NF>=3 && $1==s { print $2, $3 }' "$stacks_file")
-	STACKROWS
+	done >>"$stacks_out"
+	stacks_published=true
 done
+
+if [ "$stacks_published" = true ]; then
+	stacks_tag="stacks/v$(sha256_of "$stacks_out" | cut -c1-12)"
+	if [ "$force_stacks" = true ] ||
+		! printf '%s\n' "$existing_tags" | grep -qxF "$stacks_tag"; then
+		stacks_build=true
+	else
+		stacks_build=false
+	fi
+else
+	stacks_tag=
+	stacks_build=false
+fi
+echo "stacks: ${stacks_tag:-no resolved cloud sets} build=$stacks_build"
+printf 'stacks_build=%s\nstacks_tag=%s\nstacks_file=%s\n' \
+	"$stacks_build" "$stacks_tag" "$stacks_out" >>"$out"
 
 # shellcheck disable=SC2086 # $k3s_candidates is a word list, split intended
 k3s_matrix=$(ver_matrix k3s "$k3s_forced_v" $k3s_candidates)
@@ -814,27 +1000,22 @@ fi
 
 # --------------------------------------------------------------- oci mirrors
 # zstd:chunked repacks of upstream platform images. scripts/oci-images.txt
-# lists "<name> <registry/repo> <gh repo|pin:tag> <sed>": the resolved tag is
-# the upstream GitHub release tag transformed by <sed> ("-" or empty = no
-# transform), or a literal pin:<tag> for chart-pinned images with no release
-# source. Registry tag listings are unordered and paginated (ghcr caps
-# tags/list at 100 per page), so they can't resolve latest — the GH release
-# is the source of truth. A GitHub release can precede (or skip) registry
-# promotion, so the newest release whose image is actually pushed wins; if
-# nothing recent is servable the product is skipped until the next run. A
-# missing pinned tag fails the run.
-# Output is a build matrix (all arches are handled in one skopeo copy).
-# Stack-declared pins from scripts/stacks.txt seed the matrix; the loop's
-# latest-resolution cells skip any name:version a stack already queued.
-oci_matrix=$oci_stack_cells
+# lists "<name> <registry/repo> <source> <sed> <k8s> <scope>"; a row resolves
+# to its source's newest servable image tag (see the file header for the
+# source kinds). Registry tag listings are unordered and paginated (ghcr caps
+# tags/list at 100 per page), so they can't resolve latest; GitHub releases
+# and the version-sorted registry filter are the sources of truth, and the
+# newest candidate whose image is actually pushed wins. If nothing recent is
+# servable the product is skipped until the next run; a missing pin fails.
+# Output is a build matrix (all arches are handled in one skopeo copy), with
+# the resolved stack cells from scripts/stacks.txt seeded ahead of it; the
+# loop skips any name:version a stack already queued.
 oci_names=
-oci_build=false
-[ -n "$oci_matrix" ] && oci_build=true
 oci_matched_force=false
 # Resolution probes the registry for every row, so skopeo is needed before
 # the loop (the stacks section only ensures it when stacks.txt has rows).
 ensure_cmds skopeo
-while read -r oci_name oci_repo oci_gh oci_sed || [ -n "$oci_name" ]; do
+while read -r oci_name oci_repo oci_src oci_sed oci_rule oci_scope || [ -n "$oci_name" ]; do
 	case "$oci_name" in '' | '#'*) continue ;; esac
 	case " $oci_names " in
 	*" $oci_name "*)
@@ -842,8 +1023,8 @@ while read -r oci_name oci_repo oci_gh oci_sed || [ -n "$oci_name" ]; do
 		exit 1 ;;
 	esac
 	oci_names="$oci_names $oci_name"
-	[ -n "$oci_repo" ] && [ -n "$oci_gh" ] || {
-		echo "check.sh: bad oci-images.txt line: '$oci_name $oci_repo $oci_gh $oci_sed'" >&2
+	[ -n "$oci_repo" ] && [ -n "$oci_src" ] || {
+		echo "check.sh: bad oci-images.txt line: '$oci_name $oci_repo $oci_src $oci_sed $oci_rule $oci_scope'" >&2
 		exit 1
 	}
 	forced=false
@@ -853,28 +1034,21 @@ while read -r oci_name oci_repo oci_gh oci_sed || [ -n "$oci_name" ]; do
 	elif [ "$force_product" = oci-mirror ] && [ -z "$force_oci_name" ]; then
 		forced=true
 	fi
-	case "$oci_sed" in '' | -) oci_sed='s/$//' ;; esac
 	pinned=false
+	case "$oci_src" in pin:*) pinned=true ;; esac
 	if [ "$oci_name" = "$force_oci_name" ] && [ -n "$force_oci_tag" ]; then
 		oci_tag=$force_oci_tag
 	else
-		case "$oci_gh" in
-		pin:*)
-			# Chart-pinned image or a registry with no release source: the
-			# tag is literal, bumped by editing this file.
-			oci_tag=${oci_gh#pin:}
-			pinned=true ;;
-		*)
-			oci_tag=$(latest_eligible_oci "$oci_gh" "$oci_sed" "$oci_repo")
-			[ -n "$oci_tag" ] || {
-				if [ "$oci_name" = "$force_oci_name" ]; then
-					echo "check.sh: no servable tag in recent $oci_gh releases" >&2
-					exit 1
-				fi
-				echo "oci-$oci_name: no servable tag in recent $oci_gh releases — skipping"
-				continue
-			} ;;
-		esac
+		# oci_latest_tag memoizes the resolution the stack resolver also used.
+		oci_tag=$(oci_latest_tag "$oci_name")
+		[ -n "$oci_tag" ] || {
+			if [ "$oci_name" = "$force_oci_name" ]; then
+				echo "check.sh: no servable tag for $oci_name ($oci_src)" >&2
+				exit 1
+			fi
+			echo "oci-$oci_name: no servable tag ($oci_src) — skipping"
+			continue
+		}
 	fi
 	oci_ver="${oci_tag#v}"
 	case " $oci_cell_keys " in
@@ -896,12 +1070,13 @@ while read -r oci_name oci_repo oci_gh oci_sed || [ -n "$oci_name" ]; do
 			echo "oci-$oci_name: oci-$oci_name/v$oci_ver build=false"
 		fi ;;
 	esac
-done <"$oci_file"
+done <"$oci_work/rows"
 if [ -n "$force_oci_name" ] && [ "$oci_matched_force" = false ]; then
 	echo "check.sh: '$force_oci_name' is not in oci-images.txt" >&2
 	exit 1
 fi
 printf 'oci_build=%s\noci_matrix={"include":[%s]}\n' "$oci_build" "$oci_matrix" >>"$out"
+rm -rf "$oci_work"
 
 # ----------------------------------------------------------------- ci tools
 # Verified mirrors of small public binaries that consumers pin by
