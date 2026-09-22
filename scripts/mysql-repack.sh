@@ -62,17 +62,30 @@ sudo apt-get install -y --no-install-recommends libaio1t64 ||
 	sudo apt-get install -y --no-install-recommends libaio1
 
 ldd "$prefix"/bin/* |
-	sed -n 's|^[[:space:]]*\(lib[^ ]*\)[[:space:]]*=>[[:space:]]*\(/[^ ]*\).*|\1 \2|p' |
+	sed -n -e 's|^[[:space:]]*\(lib[^ ]*\)[[:space:]]*=>[[:space:]]*\(/[^ ]*\).*|\1 \2|p' \
+		-e 's|^[[:space:]]*\(lib[^ ]*\)[[:space:]]*=>[[:space:]]*not found.*|\1 -|p' |
 	sort -u |
 	while read -r so path; do
 		[ -n "$so" ] || continue
-		case "$path" in "$prefix"/*) continue ;; esac
 		case "$so" in
 		libc.so.* | libm.so.* | libdl.so.* | libpthread.so.* | librt.so.* | \
 			libresolv.so.* | libgcc_s.so.* | libstdc++.so.* | ld-linux-*.so.* | \
-			libcrypt.so.*) ;;
-		*) cp -L "$path" "$prefix/lib/private/$so" ;;
+			libcrypt.so.*) continue ;;
 		esac
+		if [ "$path" = - ]; then
+			# Ubuntu 24.04+ renamed some sonames in the time_t transition
+			# (libaio.so.1 -> libaio.so.1t64): bundle the t64 provider under
+			# the soname the upstream binaries ask for.
+			path=$(find /usr/lib /lib -name "${so}t64" -print -quit 2>/dev/null) || path=
+			[ -n "$path" ] || {
+				echo "mysql-repack.sh: no provider for $so" >&2
+				exit 1
+			}
+		fi
+		case "$path" in
+		"$prefix"/*) continue ;;
+		esac
+		cp -L "$path" "$prefix/lib/private/$so"
 	done
 
 # Oracle ships debug info inline (mysqld is ~460MB unstripped); strip it.
