@@ -134,16 +134,20 @@ skipped because the deployment disables them.
 ## Per-cloud stacks
 
 [`stacks.txt`](scripts/stacks.txt) declares each cloud's target Kubernetes
-minor — `upcloud k8s 1.37` — and nothing else. `check.sh` computes the
-deployed set: the newest k3s patch of that minor plus every component in
-[`oci-images.txt`](scripts/oci-images.txt), resolved through that row's
-source and its `<k8s>` coupling rule. A component that cannot supply the
-target minor (e.g. no cloud-CCM image for it yet) drops the whole cloud one
-minor and resolution retries, so a cloud never runs ahead of its slowest
-dependency. Coupled components today: `gcp-ccm` and `alicloud-csi-plugin`
-must match the minor, `oci-ccm` may trail by one; everything else tracks
-latest and never holds a cloud back. A `k3s` resolution carries the k3s
-files, the k3s-system images, and `rancher/k3s-upgrade` at the same version.
+version — `gcp k8s latest` (the newest k3s minor) or an explicit minor such
+as `1.37` to hold it back — and nothing else. `check.sh` computes the
+deployed set: the newest k3s patch of that minor plus every in-scope
+component in [`oci-images.txt`](scripts/oci-images.txt), resolved through
+that row's source and its `<k8s>` coupling rule. A component that cannot
+supply the target minor drops the whole cloud one minor and resolution
+retries, so a cloud never runs ahead of its slowest dependency and moves up
+by itself as soon as that dependency catches up. Coupling today: `cilium`
+(and its operator and envoy, which follow it) must list the minor in
+cilium's documented e2e-tested Kubernetes set — cilium runs on every node,
+so it gates upgrades; `gcp-ccm` and `alicloud-csi-plugin` must match the
+minor; `oci-ccm` may trail by one. Everything else tracks latest and never
+holds a cloud back. A `k3s` resolution carries the k3s files, the
+k3s-system images, and `rancher/k3s-upgrade` at the same version.
 
 The resolved sets seed the build matrices and are published as a
 content-addressed `stacks/v<hash>` release whose `stacks.txt` asset carries
