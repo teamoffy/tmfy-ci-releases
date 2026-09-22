@@ -1,0 +1,24 @@
+# Pulumi resource provider binaries the deployments use, one row per
+# provider:
+#
+#   <name> <gh-repo>
+#
+# Tracked at the repo's latest GitHub release (with the scheduled 12h bake-in
+# window); the next run after a new provider release mirrors it as
+# pulumi-plugin-<name>/v<version>. Assets are
+# pulumi-plugin-<name>-<version>-<linux-x64|linux-arm64|darwin-arm64>.tar.zst,
+# staging pulumi-resource-<name> at usr/local/bin/ (extract at /).
+#
+# The upstream tarball is pulumi-resource-<name>-v<version>-<os>-<arch>.tar.gz
+# from the row's <gh-repo> release, verified against its GitHub asset digest.
+# Providers whose SDKs reuse another provider's plugin need no row of their
+# own: the CRD extension SDKs all use the `kubernetes` binary.
+alicloud           pulumi/pulumi-alicloud
+aws                pulumi/pulumi-aws
+cloudflare         pulumi/pulumi-cloudflare
+gcp                pulumi/pulumi-gcp
+kubernetes         pulumi/pulumi-kubernetes
+oci                pulumi/pulumi-oci
+random             pulumi/pulumi-random
+terraform-provider pulumi/pulumi-terraform-provider
+upcloud            UpCloudLtd/pulumi-upcloud

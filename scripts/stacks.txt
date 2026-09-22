@@ -3,6 +3,18 @@
 #
 #   <stack> <product> <version-or-tag>
 #
+# These rows are deployment pins — the versions actually running on each
+# cloud's nodes — not version tracking. A stack's image versions must line up
+# with its k3s minor (and, e.g., its cloud-provider CCM), so a cloud bumps to
+# a new k8s version deliberately, one stack at a time. Rows are exempt from
+# the 12h bake-in window: they are human-vetted.
+#
+# Contrast with oci-images.txt, which defines which images are mirrored at
+# all and tracks each upstream repo's latest release. Rows here just pick,
+# per cloud, which mirrored version gets deployed — and a stack row for an
+# image with no release yet queues that specific version for build, so
+# releases exist for every deployed version.
+#
 # A stack is queued only when every row is available upstream or already has a
 # release here. Build and publication failures are handled by the workflow.
 #

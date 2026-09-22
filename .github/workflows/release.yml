@@ -15,8 +15,9 @@ on:
           aws-lc, bun, graalvm, zlib-ng, postgres, mysql, valkey, clickhouse,
           pebble, typesense, zstd, libgit2, sqlite-vec, llama-embedding,
           oci-mirror (or oci-<name>), k3s, k3s-system, flatcar,
-          flatcar-zfs-sysext, ci-tools (or a tool name from ci-tools.txt).
-          Empty = check every product for upstream updates.
+          flatcar-zfs-sysext, ci-tools (or a tool name from ci-tools.txt),
+          pulumi-plugins (or pulumi-plugin-<name>). Empty = check every
+          product for upstream updates.
         required: false
         type: string
       version:
@@ -26,16 +27,18 @@ on:
           valkey: server/bloom e.g. 9.1.2/1.0.1
           libgit2: libgit2/libssh2 e.g. 1.9.7/1.11.1
           llama-embedding: bNNNN e.g. b10819
-          mysql: the upstream version e.g. 9.7.2 (empty = newest 9.x tag with a
-          published generic tarball)
+          mysql: the upstream version e.g. 9.7.2 (empty = newest LTS point
+          release with a published generic tarball)
           oci-mirror: name:tag from oci-images.txt e.g. cilium:v1.20.1
           oci-<name>: the image tag e.g. v1.20.1 (empty = newest servable
           upstream release)
-          graalvm: must equal the version pinned in graalvm.txt — GDS has no
-          "latest", so the manifest is bumped to change versions
+          graalvm: the JDK version e.g. 25.0.4.1.1 (empty = newest version
+          published on GDS for all platforms)
           flatcar-zfs-sysext: flatcar/zfs e.g. 4593.2.5/2.4.4
           ci-tools or <tool name>: the upstream tag e.g. kubectl:v1.36.4
           (empty ci-tools rebuilds every tool in ci-tools.txt at latest)
+          pulumi-plugins: no version (rebuilds every provider at latest);
+          pulumi-plugin-<name>: the provider version (empty = latest)
         required: false
         type: string
 
@@ -60,6 +63,7 @@ jobs:
       bun_version: ${{ steps.resolve.outputs.bun_version }}
       bun_build: ${{ steps.resolve.outputs.bun_build }}
       graalvm_version: ${{ steps.resolve.outputs.graalvm_version }}
+      graalvm_artifacts: ${{ steps.resolve.outputs.graalvm_artifacts }}
       graalvm_build: ${{ steps.resolve.outputs.graalvm_build }}
       zlib_ng_version: ${{ steps.resolve.outputs.zlib_ng_version }}
       zlib_ng_build: ${{ steps.resolve.outputs.zlib_ng_build }}
@@ -106,6 +110,9 @@ jobs:
       flatcar_zfs_sysext_build: ${{ steps.resolve.outputs.flatcar_zfs_sysext_build }}
       tools_matrix: ${{ steps.resolve.outputs.tools_matrix }}
       tools_build: ${{ steps.resolve.outputs.tools_build }}
+      pulumi_plugins_matrix: ${{ steps.resolve.outputs.pulumi_plugins_matrix }}
+      pulumi_plugins_images_matrix: ${{ steps.resolve.outputs.pulumi_plugins_images_matrix }}
+      pulumi_plugins_build: ${{ steps.resolve.outputs.pulumi_plugins_build }}
     steps:
       - name: Clone the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -263,8 +270,8 @@ jobs:
           EOF
 
   # --------------------------------------------------------------- graalvm
-  # GDS bundles exist for linux-x64, linux-arm64, and macos-arm64 only —
-  # graalvm.txt's platform rows are the matrix.
+  # check.sh resolves the newest JDK version GDS publishes for all three
+  # platforms plus each platform's artifact id + sha256 (graalvm_artifacts).
   build-graalvm:
     needs: check
     if: needs.check.outputs.graalvm_build == 'true'
@@ -282,8 +289,14 @@ jobs:
       - name: Repack GraalVM bundle
         env:
           GRAALVM_WORK: ${{ runner.temp }}/graalvm-work
-          GRAALVM_PLATFORMS: ${{ matrix.platform }}
-        run: sh scripts/graalvm-repack.sh "${{ needs.check.outputs.graalvm_version }}"
+          GRAALVM_ARTIFACTS: ${{ needs.check.outputs.graalvm_artifacts }}
+        run: |
+          spec=$(printf '%s' "$GRAALVM_ARTIFACTS" | \
+            jq -r --arg p "${{ matrix.platform }}" '.[$p].id + " " + .[$p].sha')
+          # shellcheck disable=SC2086 # "id sha" word-split intended
+          sh scripts/graalvm-repack.sh \
+            "${{ needs.check.outputs.graalvm_version }}" \
+            "${{ matrix.platform }}" $spec
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -318,10 +331,10 @@ jobs:
         run: |
           set -eu
           sh scripts/publish-release.sh "graalvm/v${VERSION}" "graalvm v${VERSION}" assets <<EOF
-          Oracle GraalVM for JDK ${VERSION} repacked from the pinned GDS artifacts as max-zstd (level 22) tar.zst.
+          Oracle GraalVM for JDK ${VERSION} repacked from the GDS artifacts as max-zstd (level 22) tar.zst.
 
-          - Upstream: https://www.oracle.com/downloads/graalvm-downloads.html (GDS artifact ids + sha256 pins in scripts/graalvm.txt)
-          - Upstream checksums were verified before repacking (sha256 pin + opc-meta-content-sha256 object metadata cross-check).
+          - Upstream: https://www.oracle.com/downloads/graalvm-downloads.html (artifact ids + sha256 resolved from the GDS artifacts API — the same endpoint graalvm/setup-graalvm uses)
+          - Upstream checksums were verified before repacking (GDS checksum field + opc-meta-content-sha256 object metadata cross-check).
           - Platforms: linux-x64, linux-arm64, darwin-arm64 — no linux-x86-32, no darwin-x64, no Windows (matching supported runner targets).
           - Layout: the archive root is \`home/\`, the JDK home itself (\`home/bin/java\`); the macOS bundle's \`Contents/Home\` nesting is flattened to the same contract. Extract at the destination: \`tar --zstd -xf <asset> -C <dest>\` gives \`<dest>/home/bin/java\`.
           - Extraction needs zstd (preinstalled on GitHub runner images).
@@ -1504,12 +1517,87 @@ jobs:
           tardir) layout="extract at \`/\` — the install lands in \`/opt/$NAME\`" ;;
           *) layout="extract at \`/\` — the binary lands in \`/usr/local/bin\`" ;;
           esac
+          # A manifest row may skip an arch with "-", so the notes list the
+          # platforms actually built rather than assuming both.
+          platforms=$(printf '%s\n' assets/*.tar.zst |
+            sed -E 's/.*-(linux-x64|linux-arm64)\.tar\.zst$/\1/' | paste -sd, -)
           sh scripts/publish-release.sh "$NAME/v$VERSION" "$NAME $VERSION" assets <<EOF
-          $NAME $TAG upstream downloads, verified and repacked as max-zstd (level 22) tar.zst for linux-x64 and linux-arm64.
+          $NAME $TAG upstream downloads, verified and repacked as max-zstd (level 22) tar.zst for $platforms.
 
           - Upstream: https://github.com/$REPO/releases/tag/$TAG
           - Verified: each downloaded file against its upstream checksum — the GitHub asset digest for github.com downloads, or the published .sha256/.sha256sum sidecar or per-directory SHASUMS256.txt/sha256sums.txt otherwise.
           - Layout: $layout — \`tar --zstd -xf <asset>\` needs zstd (preinstalled on GitHub runner images)
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - License: see the upstream repository
+          EOF
+
+  # --------------------------------------------------------- pulumi plugins
+  # Pulumi resource provider binaries, each tracked at its repo's latest
+  # release: one build cell per (provider, platform), one release per
+  # provider. check.sh emits both matrices.
+  build-pulumi-plugins:
+    needs: check
+    if: needs.check.outputs.pulumi_plugins_build == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.check.outputs.pulumi_plugins_images_matrix) }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Repack provider
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULUMI_PLUGIN_PLATFORM: ${{ matrix.platform }}
+          PULUMI_PLUGIN_WORK: ${{ runner.temp }}/pulumi-plugin-work
+        run: sh scripts/pulumi-plugin-repack.sh "${{ matrix.name }}" "${{ matrix.version }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pulumi-plugin-${{ matrix.name }}-${{ matrix.platform }}
+          path: ${{ runner.temp }}/pulumi-plugin-work/out/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  release-pulumi-plugins:
+    needs: [check, build-pulumi-plugins]
+    if: needs.check.outputs.pulumi_plugins_build == 'true' && needs.build-pulumi-plugins.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.check.outputs.pulumi_plugins_matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: pulumi-plugin-${{ matrix.name }}-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          shas=$(cat assets/upstream-sha256-*.txt)
+          sh scripts/publish-release.sh "pulumi-plugin-${{ matrix.name }}/v${{ matrix.version }}" "pulumi-plugin-${{ matrix.name }} ${{ matrix.version }}" assets <<EOF
+          Pulumi \`${{ matrix.name }}\` provider plugin ${{ matrix.version }}, repacked from the upstream release tarball as max-zstd (level 22) tar.zst for linux-x64, linux-arm64, and darwin-arm64.
+
+          - Upstream: https://github.com/${{ matrix.repo }}/releases/tag/v${{ matrix.version }}
+          - Verified: each downloaded tarball against its GitHub asset digest.
+          - Layout: extract at \`/\` — \`pulumi-resource-${{ matrix.name }}\` lands in \`/usr/local/bin\`; Pulumi loads the plugin from \`\$PULUMI_HOME/plugins/resource-${{ matrix.name }}-v${{ matrix.version }}/pulumi-resource-${{ matrix.name }}\`.
+          - Upstream sha256 (verified via the GitHub asset digest):
+          ${shas}
           - Verify: \`sha256sum -c SHA256SUMS.txt\`
           - License: see the upstream repository
           EOF
@@ -1608,6 +1696,7 @@ jobs:
         release-flatcar,
         release-flatcar-zfs-sysext,
         release-ci-tools,
+        release-pulumi-plugins,
         release-oci-mirror,
       ]
     if: ${{ !cancelled() }}

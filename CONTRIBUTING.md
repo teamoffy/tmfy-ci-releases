@@ -3,14 +3,15 @@
 ## Pipeline
 
 One workflow ([`release.yml`](.github/workflows/release.yml)), one run every
-2nd day (06:17 UTC), 42 jobs:
+2nd day (06:17 UTC), 44 jobs:
 
 1. **check** — resolves every product's target version from upstream (GitHub
    releases where they exist, git tags or index listings where they don't, and
    the Flatcar channel's `version.txt`) and decides whether that version is
    already released here. For the `oci-*` image mirrors it also probes each
-   resolved tag on its registry, and for `oci-*`, `k3s`, `k3s-system`, and the
-   `ci-tools.txt` tools it emits a dynamic build matrix of what's missing.
+   resolved tag on its registry, and for `oci-*`, `k3s`, `k3s-system`, the
+   `ci-tools.txt` tools, and `pulumi-plugins.txt` it emits a dynamic build
+   matrix of what's missing.
    It also checks [`stacks.txt`](scripts/stacks.txt). A stack is added to the
    build matrices only when all of its pinned versions are available upstream
    or already released here. Scheduled runs only mirror upstream releases at
@@ -37,16 +38,19 @@ scheduled check.
 `version` is optional (upstream latest if empty); multi-component products
 take slash-joined versions: postgres `18.6/2.29.2/0.8.6/1.1.1`, valkey
 `9.1.2/1.0.1`, libgit2 `1.9.7/1.11.1`, flatcar-zfs-sysext `4593.2.5/2.4.4`.
-graalvm accepts only its pinned version: the artifacts are pinned in
-[`graalvm.txt`](scripts/graalvm.txt) and a supplied version must equal that
-pin (GDS has no "latest" — bump the manifest to change versions).
+graalvm resolves its newest GDS-published JDK version when `version` is empty;
+a supplied version must exist on GDS for all three platforms (the check fails
+otherwise).
 `oci-mirror` takes `<name>:<tag>` from
 [`oci-images.txt`](scripts/oci-images.txt) (e.g. `cilium:v1.20.1`), or force a
 single image directly with `product=oci-<name>` + `version=<tag>`; an empty
 version rebuilds every image at its newest servable tag. `ci-tools` works the same
 way over [`ci-tools.txt`](scripts/ci-tools.txt) — `product=ci-tools` +
-`version=<name>:<tag>` or `product=<tool name>` + `version=<tag>`. From the
-Actions tab, or:
+`version=<name>:<tag>` or `product=<tool name>` + `version=<tag>`.
+`pulumi-plugins` rebuilds every provider in
+[`pulumi-plugins.txt`](scripts/pulumi-plugins.txt) at its latest release;
+`product=pulumi-plugin-<name>` rebuilds one, and a `version` input picks that
+exact upstream release. From the Actions tab, or:
 
 ```sh
 gh workflow run release.yml -f product=zstd -f version=1.5.7
@@ -63,9 +67,10 @@ target, so bump them deliberately via a forced version.
 
 - `check.sh` — version resolution for all products. Reads `FORCE_PRODUCT` /
   `FORCE_VERSION` and writes versions and build decisions to `GITHUB_OUTPUT`.
-  Products that can build several releases in one run (`oci-*`, `k3s`,
-  `k3s-system`, and ci-tools) use JSON matrices; `k3s-system` additionally
-  emits a `(version, image)` cell matrix for its per-image build fan-out.
+  Products that fan out into build matrices (`oci-*`, `k3s`, `k3s-system`,
+  ci-tools, and `pulumi-plugins.txt`) use JSON matrices; `k3s-system`
+  additionally emits a `(version, image)` cell matrix for its per-image
+  build fan-out.
 - `oci-images.txt` — tracked image mirrors: `<name> <registry/repo>
   <gh repo|pin:tag> <sed>`, one per line. `<gh repo>`'s newest release tag,
   transformed by `<sed>`, is the image tag to mirror — except a release that
@@ -116,14 +121,24 @@ target, so bump them deliberately via a forced version.
   `.sha256`/`.sha256sum` sidecar or a per-directory
   `SHASUMS256.txt`/`sha256sums.txt` (nodejs.org's convention). Takes
   `CI_TOOLS_WORK`, `GH_TOKEN`.
-- `graalvm.txt` — pinned Oracle GraalVM for JDK bundles: one `version` row
-  plus `<platform> <gds-artifact-id> <sha256>` rows for linux-x64, linux-arm64,
-  and darwin-arm64. GDS exposes no "latest" and artifact ids are immutable, so
-  a version bump is a manifest edit; the `version` value names the release tag.
-- `graalvm-repack.sh <version>` — download each pinned GDS bundle, verify the
-  sha256 pin and the object-storage `opc-meta-content-sha256` header, restage
-  the JDK home as `home/` (flattening the macOS `Contents/Home` nesting), and
-  pack a tar.zst. Takes `GRAALVM_WORK`, `GRAALVM_PLATFORMS`.
+- `pulumi-plugins.txt` — tracked Pulumi resource provider binaries:
+  `<name> <gh-repo>` per line. The version source is the repo's latest GitHub
+  release; `check.sh` emits a per-(provider, platform) build matrix for the
+  missing releases. Verified against the upstream GitHub asset digest.
+- `pulumi-plugin-repack.sh <name> <version>` — fetch, verify, and repack one
+  provider's upstream tarball for `PULUMI_PLUGIN_PLATFORM`
+  (`linux-x64`|`linux-arm64`|`darwin-arm64`) into
+  `pulumi-plugin-<name>-<version>-<platform>.tar.zst`, staging
+  `pulumi-resource-<name>` at `usr/local/bin/`. Takes `PULUMI_PLUGIN_WORK`,
+  `GH_TOKEN`.
+- `graalvm-repack.sh <version> <platform> <gds-artifact-id> <sha256>` —
+  download one GDS bundle, verify the sha256 from the API response and the
+  object-storage `opc-meta-content-sha256` header, restage the JDK home as
+  `home/` (flattening the macOS `Contents/Home` nesting), and pack a tar.zst.
+  `check.sh` resolves the version plus per-platform artifact id + sha256 from
+  the GDS artifacts API (the newest JDK version published for all platforms;
+  a `version` input must exist on GDS for all platforms). Takes
+  `GRAALVM_WORK`.
 - `<product>-build.sh <version>...` — build, smoke-test, and pack one product.
   The mirrors use `*-repack.sh` instead (`bun-repack.sh`, `graalvm-repack.sh`,
   `mysql-repack.sh`, `sqlite-vec-repack.sh`, `llama-embedding-repack.sh`):
@@ -161,10 +176,12 @@ What runs where:
   macOS with their smoke tests included. Bun repacks and verifies upstream's
   Linux and macOS zips on the Linux runner; sqlite-vec and llama-embedding
   repack upstream's binaries on each platform's native runner so their smoke
-  tests load `vec0` and run `llama-cli`. GraalVM repacks the pinned GDS
+  tests load `vec0` and run `llama-cli`. GraalVM repacks the resolved GDS
   bundles on the Linux runner for all three platforms — the repack is
   platform-independent, and its post-pack check re-extracts `home/bin/java`
-  rather than executing the JDK.
+  rather than executing the JDK. The `pulumi-plugin-*` repack is
+  platform-independent too: it verifies and re-archives upstream's per-platform
+  tarballs on the Linux runner.
 - **Published Linux-only targets** — postgres, mysql, valkey, clickhouse,
   pebble, typesense, libgit2, and flatcar-zfs-sysext. The first six and the
   sysext build reject non-Linux hosts; the sysext build additionally needs
