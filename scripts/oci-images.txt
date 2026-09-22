@@ -43,4 +43,5 @@ gcp-ccm                   registry.k8s.io/cloud-provider-gcp/cloud-controller-ma
 gcp-pd-csi-driver         registry.k8s.io/cloud-provider-gcp/gcp-compute-persistent-disk-csi-driver  kubernetes-sigs/gcp-compute-persistent-disk-csi-driver  -
 alicloud-ccm              registry-cn-hangzhou.ack.aliyuncs.com/acs/cloud-controller-manager  kubernetes/cloud-provider-alibaba-cloud  -
 alicloud-csi-plugin       registry.cn-beijing.aliyuncs.com/acs/csi-plugin           kubernetes-sigs/alibaba-cloud-csi-driver          -
+oci-ccm                   ghcr.io/oracle/cloud-provider-oci                        oracle/oci-cloud-controller-manager               -
 zfs-driver                docker.io/openebs/zfs-driver                              pin:2.11.1                                        -
