@@ -29,10 +29,14 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$script_dir/lib.sh"
 
-# zstd stays single-threaded (the default): -T0 splits the input into jobs and
-# changes the bytes it emits for the same input. --long=27 is the largest window
-# the zstd CLI and libzstd accept on decompression without an explicit
-# --long/--memory flag, so `tar --zstd -xf` keeps working unconfigured.
+# -T0 (one worker per physical core) is safe for reproducibility: the worker
+# count does not change the emitted bytes — zstd splits the input into fixed
+# jobs (the automatic 512 MB at --long=27; -B overrides it) and compresses them
+# independently, so -T1 and -T0 are byte-identical (verified on zstd 1.5.7).
+# MT only engages once the payload exceeds one job, so small products are
+# unchanged; a worker costs ~1.6 GB of tables at level 22. --long=27 is the
+# largest window the zstd CLI and libzstd accept on decompression without an
+# explicit --long/--memory flag, so `tar --zstd -xf` keeps working unconfigured.
 #
 # `sh` has no portable pipefail, so record tar's status out of band: zstd happily
 # compresses a truncated stream and exits 0, which would ship a partial archive.
@@ -40,7 +44,7 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 tar_status="$out.tar-status"
 rm -f "$tar_status"
 { COPYFILE_DISABLE=1 tar -C "$src" -cf - "$entry" || echo "$?" >"$tar_status"; } |
-	zstd --ultra "-$level" --long=27 -q -o "$out.tmp"
+	zstd --ultra "-$level" --long=27 -T0 -q -o "$out.tmp"
 if [ -s "$tar_status" ]; then
 	printf 'pack.sh: tar failed (exit %s) while archiving %s/%s\n' \
 		"$(cat "$tar_status")" "$src" "$entry" >&2

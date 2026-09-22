@@ -18,6 +18,10 @@ while read -r name _ || [ -n "$name" ]; do
 	case "$name" in '' | '#'*) continue ;; esac
 	products="$products $name"
 done <"$script_dir/ci-tools.txt"
+while read -r name _ || [ -n "$name" ]; do
+	case "$name" in '' | '#'*) continue ;; esac
+	products="$products pulumi-plugin-$name"
+done <"$script_dir/pulumi-plugins.txt"
 
 # Guard the arithmetic below: keep=0 (or junk) would prune every release.
 case "$keep" in

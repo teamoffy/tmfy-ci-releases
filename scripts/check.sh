@@ -17,6 +17,10 @@
 #                   ci-tools:   <name>:<tag>   e.g. kubectl:v1.36.4
 #                   <tool name>: <tag>          e.g. product=kubectl
 #                   (empty rebuilds every image/tool in the list at latest)
+#                   pulumi-plugins:            product=pulumi-plugins
+#                   pulumi-plugin-<name>:      product=pulumi-plugin-aws
+#                   (versions are pinned in pulumi-plugins.txt; a version
+#                   input must equal the pin)
 #   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT, GITHUB_EVENT_NAME
 #                   (schedule applies the 12h release bake-in window;
 #                   workflow_dispatch and local runs bypass it)
@@ -39,6 +43,8 @@ force_oci_tag=
 force_tool=
 force_tool_tag=
 force_all_tools=false
+force_pulumi_plugin=
+force_all_pulumi_plugins=false
 case "$force_product" in
 "" | aws-lc | bun | graalvm | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext) ;;
 oci-mirror)
@@ -70,6 +76,18 @@ ci-tools)
 	else
 		force_all_tools=true
 	fi ;;
+pulumi-plugins)
+	# Every pin rebuilds; the versions live in pulumi-plugins.txt, so a
+	# version input is meaningless here.
+	if [ -n "$force_version" ]; then
+		echo "check.sh: product=pulumi-plugins rebuilds every pin in pulumi-plugins.txt; use product=pulumi-plugin-<name> for one" >&2
+		exit 1
+	fi
+	force_all_pulumi_plugins=true ;;
+pulumi-plugin-*)
+	# pulumi-plugin-<name> forces that provider; a version input must equal
+	# the manifest pin.
+	force_pulumi_plugin="${force_product#pulumi-plugin-}" ;;
 *)
 	# ci-tools product names are dynamic: a manifest name forces that tool.
 	if manifest_names "$script_dir/ci-tools.txt" | grep -qx "$force_product"; then
@@ -83,6 +101,12 @@ esac
 if [ -n "$force_oci_name" ]; then
 	case "$force_oci_name" in '' | *[!a-z0-9-]*)
 		echo "check.sh: invalid oci-mirror name in '$force_version'" >&2
+		exit 1 ;;
+	esac
+fi
+if [ -n "$force_pulumi_plugin" ]; then
+	case "$force_pulumi_plugin" in '' | *[!a-z0-9-]*)
+		echo "check.sh: invalid pulumi plugin name in '$force_product'" >&2
 		exit 1 ;;
 	esac
 fi
@@ -863,3 +887,67 @@ if [ -n "$force_tool" ] && [ "$tools_matched_force" = false ]; then
 	exit 1
 fi
 printf 'tools_build=%s\ntools_matrix={"include":[%s]}\n' "$tools_build" "$tools_matrix" >>"$out"
+
+# ---------------------------------------------------------- pulumi plugins
+# Pulumi resource provider binaries the deployments use, pinned in
+# pulumi-plugins.txt (<name> <version> <gh-repo>). The manifest is the version
+# source (like graalvm.txt), so there is no upstream resolution and no bake-in
+# window: a bump is a manifest edit, and the next run builds the missing
+# release. Output is a build matrix per (provider, platform) plus a release
+# matrix per provider.
+pulumi_plugins_file="$script_dir/pulumi-plugins.txt"
+pulumi_plugins_platforms="linux-x64 linux-arm64 darwin-arm64"
+pulumi_plugins_matrix=
+pulumi_plugins_images_matrix=
+pulumi_plugins_build=false
+pulumi_plugins_names=
+pulumi_plugins_matched_force=false
+while read -r pp_name pp_ver pp_repo || [ -n "$pp_name" ]; do
+	case "$pp_name" in '' | '#'*) continue ;; esac
+	case " $pulumi_plugins_names " in
+	*" $pp_name "*)
+		echo "check.sh: duplicate name in pulumi-plugins.txt: $pp_name" >&2
+		exit 1 ;;
+	esac
+	pulumi_plugins_names="$pulumi_plugins_names $pp_name"
+	[ -n "$pp_ver" ] && [ -n "$pp_repo" ] || {
+		echo "check.sh: bad pulumi-plugins.txt line: '$pp_name $pp_ver $pp_repo'" >&2
+		exit 1
+	}
+	if [ "$pp_name" = "$force_pulumi_plugin" ]; then
+		pulumi_plugins_matched_force=true
+		[ -z "$force_version" ] || [ "$force_version" = "$pp_ver" ] || {
+			echo "check.sh: pulumi plugin versions are pinned in pulumi-plugins.txt (currently $pp_ver) — update the manifest to bump" >&2
+			exit 1
+		}
+	fi
+	forced=false
+	if [ "$pp_name" = "$force_pulumi_plugin" ] ||
+		[ "$force_all_pulumi_plugins" = true ]; then
+		forced=true
+	fi
+	if [ "$forced" = true ] ||
+		! printf '%s\n' "$existing_tags" | grep -qxF "pulumi-plugin-$pp_name/v$pp_ver"; then
+		pulumi_plugins_build=true
+		pulumi_plugins_matrix="${pulumi_plugins_matrix:+$pulumi_plugins_matrix,}$(printf \
+			'{"name":"%s","version":"%s","repo":"%s"}' \
+			"$pp_name" "$pp_ver" "$pp_repo")"
+		# shellcheck disable=SC2086 # $pulumi_plugins_platforms is a word list, split intended
+		for pp_platform in $pulumi_plugins_platforms; do
+			pulumi_plugins_images_matrix="${pulumi_plugins_images_matrix:+$pulumi_plugins_images_matrix,}$(printf \
+				'{"name":"%s","version":"%s","platform":"%s"}' \
+				"$pp_name" "$pp_ver" "$pp_platform")"
+		done
+		echo "pulumi-plugin-$pp_name: v$pp_ver build=true ($pulumi_plugins_platforms)"
+	else
+		echo "pulumi-plugin-$pp_name: pulumi-plugin-$pp_name/v$pp_ver build=false"
+	fi
+done <"$pulumi_plugins_file"
+if [ -n "$force_pulumi_plugin" ] && [ "$pulumi_plugins_matched_force" = false ]; then
+	echo "check.sh: '$force_pulumi_plugin' is not in pulumi-plugins.txt" >&2
+	exit 1
+fi
+printf 'pulumi_plugins_build=%s\npulumi_plugins_matrix={"include":[%s]}\n' \
+	"$pulumi_plugins_build" "$pulumi_plugins_matrix" >>"$out"
+printf 'pulumi_plugins_images_matrix={"include":[%s]}\n' \
+	"$pulumi_plugins_images_matrix" >>"$out"
