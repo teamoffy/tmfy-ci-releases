@@ -116,11 +116,14 @@ OCI image layouts (`skopeo copy --all --dest-compress-format zstd:chunked
 --dest-compress-level 19`), one `<product>-<version>-oci.tar.zst` asset per
 image covering every published architecture. The tracked set lives in
 [`oci-images.txt`](scripts/oci-images.txt): DaemonSets, CSI sidecars, cloud
-controllers, and upgrade images. Tags follow each upstream project's newest
-GitHub release whose image is actually pushed to the registry — a release can
-precede (or skip) registry promotion, so the newest servable tag wins.
-Images without a suitable release source use a literal `pin:<tag>`; the check
-fails if that tag is unavailable.
+controllers, and upgrade images. Tags come from each row's source — an
+upstream GitHub release, a version-sorted registry tag filter, or a
+chart-pinned tag derived from another component — filtered to what is
+actually pushed to the registry, since a release can precede (or skip)
+registry promotion and the newest servable candidate wins. A row with no
+derivable source can still pin a literal `pin:<tag>`; the check fails if a
+pinned tag is unavailable. The `<k8s>` and `<scope>` columns feed the
+per-cloud stacks resolution below.
 
 Each k3s version also has a `k3s-system/v<k3s-version>` release. It mirrors
 pause, coredns, local-path-provisioner, klipper-helm, and busybox as individual
@@ -130,22 +133,33 @@ skipped because the deployment disables them.
 
 ## Per-cloud stacks
 
-[`stacks.txt`](scripts/stacks.txt) declares the k3s and node-image versions
-*deployed* in each cloud — deployment pins, not version tracking. A stack's
-images must align with its k3s minor (and its cloud CCM/CSI), so each cloud
-moves to a new k8s version deliberately and independently. The distinction
-from `oci-images.txt`: that file is the mirror set tracked at upstream
-latest; these rows pick which mirrored version each cloud runs (a stack row
-with no release yet queues that exact version).
+[`stacks.txt`](scripts/stacks.txt) declares each cloud's target Kubernetes
+version — `gcp k8s latest` (the newest k3s minor) or an explicit minor such
+as `1.37` to hold it back — and nothing else. `check.sh` computes the
+deployed set: the newest k3s patch of that minor plus every in-scope
+component in [`oci-images.txt`](scripts/oci-images.txt), resolved through
+that row's source and its `<k8s>` coupling rule. A component that cannot
+supply the target minor drops the whole cloud one minor and resolution
+retries, so a cloud never runs ahead of its slowest dependency and moves up
+by itself as soon as that dependency catches up. Coupling today: `cilium`
+(and its operator and envoy, which follow it) must list the minor in
+cilium's documented e2e-tested Kubernetes set — cilium runs on every node,
+so it gates upgrades; `gcp-ccm` and `alicloud-csi-plugin` must match the
+minor; `oci-ccm` may trail by one. Everything else tracks latest and never
+holds a cloud back. A `k3s` resolution carries the k3s files, the
+k3s-system images, and `rancher/k3s-upgrade` at the same version.
 
-A stack is queued only when every row is available upstream or already has an
-exact release here. A `k3s` row covers the k3s files, the k3s-system images,
-and `rancher/k3s-upgrade` at the same version. The workflow can build upstream
-latest and several stack-pinned versions in one run. Update all related rows
-together when bumping a cloud.
+The resolved sets seed the build matrices and are published as a
+content-addressed `stacks/v<hash>` release whose `stacks.txt` asset carries
+one `<cloud> <product> <version-or-tag>` row per deployed version — that is
+what consumers read, not the declaration file. A cloud whose new set has an
+upstream artifact that is not servable yet is held out of the published file
+until a later run; an unchanged resolution republishes nothing.
 
-Latest-version checks still run alongside the stack pins, so an older pin and
-a newer upstream release can both be built in the same run.
+`oci-images.txt` remains the mirror's tracked set (each image at upstream
+latest) — the stacks resolution picks which of those versions each cloud
+runs, so a lagging CCM holds its cloud on the previous minor while the mirror
+still carries the newer images.
 
 ```sh
 curl -fsSL --retry 3 -O "https://github.com/teamoffy/tmfy-ci-releases/releases/download/oci-cilium/v1.20.2/oci-cilium-1.20.2-oci.tar.zst"

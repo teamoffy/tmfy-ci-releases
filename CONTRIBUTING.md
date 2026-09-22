@@ -3,22 +3,26 @@
 ## Pipeline
 
 One workflow ([`release.yml`](.github/workflows/release.yml)), one run every
-2nd day (06:17 UTC), 44 jobs:
+2nd day (06:17 UTC), 45 jobs:
 
 1. **check** — resolves every product's target version from upstream (GitHub
-   releases where they exist, git tags or index listings where they don't, and
-   the Flatcar channel's `version.txt`) and decides whether that version is
-   already released here. For the `oci-*` image mirrors it also probes each
+   releases where they exist, git tags or index listings where they don't, the
+   Flatcar channel's `version.txt`, and the GDS artifacts API for GraalVM) and
+   decides whether that version is already released here. For the `oci-*`
+   image mirrors it also probes each
    resolved tag on its registry, and for `oci-*`, `k3s`, `k3s-system`, the
-   `ci-tools.txt` tools, and `pulumi-plugins.txt` it emits a dynamic build
-   matrix of what's missing.
-   It also checks [`stacks.txt`](scripts/stacks.txt). A stack is added to the
-   build matrices only when all of its pinned versions are available upstream
-   or already released here. Scheduled runs only mirror upstream releases at
+   `ci-tools.txt` tools, `pulumi-plugins.txt`, and the stacks it emits a
+   dynamic build matrix of what's missing.
+   It also resolves [`stacks.txt`](scripts/stacks.txt): each cloud declares a
+   target Kubernetes minor and the check computes the deployed set (newest
+   k3s patch of that minor plus every `oci-images.txt` component through its
+   source and k8s rule), dropping the cloud one minor until every coupled
+   component resolves. The resolved sets are published as a content-addressed
+   `stacks/v<hash>` release. Scheduled runs only mirror upstream releases at
    least 12h old: resolution falls back to the previous release where the
-   source has history (Flatcar's channel does not, so it defers instead),
-   `stacks.txt` pins are human-vetted and exempt, and `workflow_dispatch`
-   runs bypass the window — forcing a version is the escape route.
+   source has history (Flatcar's channel does not, so it defers instead), and
+   `workflow_dispatch` runs bypass the window — forcing a version is the
+   escape route.
 2. **build-\<product\>** — one parallel job per product with its own platform
    matrix. `fail-fast: false` lets the other targets finish if one target fails.
    Every product is smoke-tested before publishing: compiled-and-run for the
@@ -50,7 +54,8 @@ way over [`ci-tools.txt`](scripts/ci-tools.txt) — `product=ci-tools` +
 `pulumi-plugins` rebuilds every provider in
 [`pulumi-plugins.txt`](scripts/pulumi-plugins.txt) at its latest release;
 `product=pulumi-plugin-<name>` rebuilds one, and a `version` input picks that
-exact upstream release. From the Actions tab, or:
+exact upstream release. `stacks` republishes the resolved stacks release
+(takes no version). From the Actions tab, or:
 
 ```sh
 gh workflow run release.yml -f product=zstd -f version=1.5.7
@@ -72,11 +77,17 @@ target, so bump them deliberately via a forced version.
   additionally emits a `(version, image)` cell matrix for its per-image
   build fan-out.
 - `oci-images.txt` — tracked image mirrors: `<name> <registry/repo>
-  <gh repo|pin:tag> <sed>`, one per line. `<gh repo>`'s newest release tag,
-  transformed by `<sed>`, is the image tag to mirror — except a release that
-  is not yet promoted to the registry is not eligible, so the newest servable
-  tag wins. `pin:<tag>` is a literal tag for chart-pinned images. The check
-  fails if a pinned tag is unavailable.
+  <source> <sed> <k8s> <scope>`, one per line. `<source>` is a GitHub repo
+  (newest release tag, transformed by `<sed>`, is the image tag), a literal
+  `pin:<tag>`, a version-sorted `registry:<regex>` tag filter, or a
+  `chart:<component>` reference. A release that is not yet promoted to the
+  registry is not eligible, so the newest servable candidate wins. `<k8s>`
+  marks how a component tracks a cloud's Kubernetes minor — `any` for
+  independent ones, `cilium` for the cilium release that lists the minor in
+  its e2e-tested set, `same:<name>`/`chart:<name>` to follow another
+  component, or `minor`, `minor-short`, `minor-trail1` for versions that
+  encode the minor — and `<scope>` is `shared` or the cloud that runs it.
+  The check fails if a pinned tag is unavailable.
 - `oci-mirror.sh <name> <repo:tag>` — `skopeo copy` re-encode of one upstream
   image's linux platforms to a zstd:chunked OCI layout (windows/darwin index
   entries are dropped: the nodes only pull linux, and the Windows variants
@@ -92,12 +103,14 @@ target, so bump them deliberately via a forced version.
   disables) into the `k3s_system_images_matrix`; `build-k3s-system` runs
   `oci-mirror.sh` per (version, image) cell and `release-k3s-system` merges a
   version's cells into one `k3s-system/v<version>` release.
-- `stacks.txt` — per-cloud deployed node sets: `<stack> <product> <tag>` per
-  line. Clouds track k8s versions independently. `check.sh` probes every row
-  and queues the stack only if each release already exists or its upstream tag
-  is available. A `k3s` row covers `k3s`, `k3s-system`, and
-  `oci-k3s-upgrade`; `oci-*` rows add cells to the image build matrix. Update
-  all related rows in one PR when bumping a cloud.
+- `stacks.txt` — per-cloud Kubernetes targets: `<stack> k8s <minor>` per
+  line. `check.sh` resolves each cloud's deployed set (the newest k3s patch
+  of the target minor plus every component in `oci-images.txt` through its
+  source and k8s rule), stepping the cloud down one minor whenever a coupled
+  component cannot supply it. The resolved sets seed the build matrices and
+  are published as a content-addressed `stacks/v<hash>` release whose
+  `stacks.txt` asset lists `<stack> <product> <version-or-tag>` rows for
+  consumers.
 - `flatcar-mirror.sh <version> <arch> <upstream-file> <kind>` — verbatim
   mirror of one release artifact, verified against the upstream `.DIGESTS`
   sha512 sidecar. The artifact set is the `build-flatcar` matrix in
