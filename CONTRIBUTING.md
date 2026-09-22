@@ -82,10 +82,12 @@ target, so bump them deliberately via a forced version.
   `pin:<tag>`, a version-sorted `registry:<regex>` tag filter, or a
   `chart:<component>` reference. A release that is not yet promoted to the
   registry is not eligible, so the newest servable candidate wins. `<k8s>`
-  marks components coupled to a cloud's Kubernetes minor (`minor`,
-  `minor-short`, `minor-trail1`; `any` for independent ones) and `<scope>` is
-  `shared` or the cloud that runs it. The check fails if a pinned tag is
-  unavailable.
+  marks how a component tracks a cloud's Kubernetes minor — `any` for
+  independent ones, `cilium` for the cilium release that lists the minor in
+  its e2e-tested set, `same:<name>`/`chart:<name>` to follow another
+  component, or `minor`, `minor-short`, `minor-trail1` for versions that
+  encode the minor — and `<scope>` is `shared` or the cloud that runs it.
+  The check fails if a pinned tag is unavailable.
 - `oci-mirror.sh <name> <repo:tag>` — `skopeo copy` re-encode of one upstream
   image's linux platforms to a zstd:chunked OCI layout (windows/darwin index
   entries are dropped: the nodes only pull linux, and the Windows variants

@@ -244,6 +244,41 @@ cilium_envoy_tag() {
 		sed -n '/repository: "quay.io\/cilium\/cilium-envoy"/{n; s/.*tag: *"\([^"]*\)".*/\1/p; q;}'
 }
 
+# cilium_for_minor <minor> — newest cilium release whose documented
+# e2e-tested Kubernetes set includes <minor> (the compatibility.rst grid at
+# the release tag). Cilium runs on every node, so a release that does not
+# list the cloud's minor is a break risk: no match steps the cloud down a
+# minor. One patch per minor line is checked, newest first.
+cilium_for_minor() {
+	_cf_minor=$1
+	_cf_json=$(gh api "repos/cilium/cilium/releases?per_page=100") || {
+		echo "check.sh: failed to list cilium releases" >&2
+		exit 1
+	}
+	for _cf_tag in $(printf '%s\n' "$_cf_json" | jq -r '
+		.[] | select((.draft | not) and (.prerelease | not) and .published_at)
+		| select('"$jq_aged"')
+		| .tag_name' | sort -Vr | awk -F. '!seen[$1 "." $2]++'); do
+		_cf_supported="$oci_work/cilium-supported-$_cf_tag"
+		if [ ! -f "$_cf_supported" ]; then
+			curl -fsSL --retry 3 --max-time 30 \
+				-o "$oci_work/cilium-compatibility.rst" \
+				"https://raw.githubusercontent.com/cilium/cilium/$_cf_tag/Documentation/network/kubernetes/compatibility.rst" || {
+				echo "check.sh: cannot read the cilium $_cf_tag compatibility table" >&2
+				exit 1
+			}
+			awk -F'|' 'NF >= 4 && $2 ~ /[0-9]+\.[0-9]+/ {
+				gsub(/[ \t]/, "", $2); print $2; exit }' \
+				"$oci_work/cilium-compatibility.rst" >"$_cf_supported"
+		fi
+		if tr ',' '\n' <"$_cf_supported" | grep -qx "$_cf_minor"; then
+			printf '%s\n' "$_cf_tag"
+			return 0
+		fi
+	done
+	return 0
+}
+
 # minor_num/prev_minor/short_minor — k8s minor arithmetic: comparable number,
 # the previous minor, and the k8s minor without the leading "1." (1.36 -> 36).
 minor_num() { printf '%s\n' "$((${1%%.*} * 100 + ${1#*.}))"; }
@@ -754,6 +789,17 @@ resolve_cloud() {
 				esac
 				case "$_rs_rule" in
 				any) _rs_tag=$(oci_latest_tag "$_rs_name") ;;
+				cilium) _rs_tag=$(cilium_for_minor "$_rs_minor") ;;
+				same:* | chart:*)
+					_rs_ref=$(awk -v n="${_rs_rule#*:}" '$1 == n { print $2; exit }' "$_rs_file")
+					[ -n "$_rs_ref" ] || {
+						_rs_ok=false
+						break
+					}
+					case "$_rs_rule" in
+					same:*) _rs_tag=$_rs_ref ;;
+					*) _rs_tag=$(cilium_envoy_tag "v${_rs_ref#v}") ;;
+					esac ;;
 				*) _rs_tag=$(stack_minor_tag "$_rs_repo" "$_rs_src" "$_rs_sed" "$_rs_rule" "$_rs_minor") ;;
 				esac
 				[ -n "$_rs_tag" ] || {
@@ -776,8 +822,11 @@ resolve_cloud() {
 stacks=$(awk 'NF >= 3 && $1 !~ /^#/ { print $1 }' "$stacks_file" | sort -u)
 [ -n "$stacks" ] && ensure_cmds gh jq curl skopeo
 
-# A component's scope must be "shared" or one of the declared clouds; catch
-# typos as configuration errors instead of silently skipping the component.
+# A component's scope must be "shared" or one of the declared clouds; its
+# k8s rule must be known; same:/chart: references must name a component
+# listed above (rows resolve in file order, so operators/envoy follow their
+# cilium). Catch these as configuration errors instead of holding a cloud.
+: >"$oci_work/components"
 while read -r _sc_name _sc_repo _sc_src _sc_sed _sc_rule _sc_scope; do
 	case "$_sc_scope" in
 	shared) ;;
@@ -787,6 +836,25 @@ while read -r _sc_name _sc_repo _sc_src _sc_sed _sc_rule _sc_scope; do
 			exit 1
 		} ;;
 	esac
+	case "$_sc_rule" in
+	any | cilium | minor | minor-short | minor-trail1) ;;
+	same:* | chart:*)
+		_sc_ref=${_sc_rule#*:}
+		grep -qx "$_sc_ref" "$oci_work/components" || {
+			echo "check.sh: oci-images.txt: $_sc_name: $_sc_rule must reference a component listed above it" >&2
+			exit 1
+		}
+		case "$_sc_rule" in
+		chart:*) [ "$_sc_ref" = cilium ] || {
+			echo "check.sh: oci-images.txt: $_sc_name: only chart:cilium is supported" >&2
+			exit 1
+		} ;;
+		esac ;;
+	*)
+		echo "check.sh: oci-images.txt: $_sc_name has unknown k8s rule '$_sc_rule'" >&2
+		exit 1 ;;
+	esac
+	printf '%s\n' "$_sc_name" >>"$oci_work/components"
 done <"$oci_work/rows"
 
 mkdir -p "$stacks_dir"

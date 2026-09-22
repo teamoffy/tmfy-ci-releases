@@ -13,6 +13,8 @@
 # automatically as soon as every coupled component has a matching version.
 # Coupled components today:
 #
+#   cilium               newest release whose e2e-tested k8s set includes
+#                        the minor (operator/envoy follow it)
 #   gcp-ccm              same k8s minor (k8s 1.36 -> v36.x)
 #   alicloud-csi-plugin  same k8s minor (k8s 1.37 -> v1.37.x)
 #   oci-ccm              at most one minor behind

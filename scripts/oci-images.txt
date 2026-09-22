@@ -20,6 +20,16 @@
 #                   docker tag is v1.x.y-k3sN). Unused for the other sources.
 # <k8s>             how the component tracks a cloud's Kubernetes minor:
 #                     any           independent — resolve to the newest version
+#                     cilium        newest cilium release whose documented
+#                                   e2e-tested Kubernetes set includes the
+#                                   minor; cilium runs on every node, so it
+#                                   gates the cloud
+#                     same:<name>   the version another component resolved to
+#                                   (must be listed above)
+#                     chart:<name>  the image tag another component's release
+#                                   chart pins, at that component's resolved
+#                                   version (chart:cilium = cilium-envoy's tag
+#                                   from cilium's values.yaml)
 #                     minor         must match the k8s minor (v<minor>.<patch>)
 #                     minor-short   must match without the leading "1."
 #                                   (k8s 1.36 -> v36.<patch>)
@@ -41,9 +51,9 @@
 #
 # This list covers DaemonSets, CSI sidecars, cloud controllers, and upgrade
 # images. The images listed by k3s itself are handled by k3s-system.
-cilium                    quay.io/cilium/cilium                                     cilium/cilium                                     -  any  shared
-cilium-operator           quay.io/cilium/operator                                   cilium/cilium                                     -  any  shared
-cilium-envoy              quay.io/cilium/cilium-envoy                               chart:cilium                                      -  any  shared
+cilium                    quay.io/cilium/cilium                                     cilium/cilium                                     -  cilium  shared
+cilium-operator           quay.io/cilium/operator                                   cilium/cilium                                     -  same:cilium  shared
+cilium-envoy              quay.io/cilium/cilium-envoy                               chart:cilium                                      -  chart:cilium  shared
 tetragon                  quay.io/cilium/tetragon                                   cilium/tetragon                                   -  any  shared
 system-upgrade-controller docker.io/rancher/system-upgrade-controller               rancher/system-upgrade-controller                 -  any  shared
 kuberlr-kubectl           docker.io/rancher/kuberlr-kubectl                         rancher/kuberlr-kubectl                           -  any  shared
