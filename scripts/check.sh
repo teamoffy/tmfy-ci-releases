@@ -10,7 +10,7 @@
 #                   valkey:   server/bloom     e.g. 9.1.2/1.0.1
 #                   libgit2:  libgit2/libssh2  e.g. 1.9.7/1.11.1
 #                   llama-embedding: bNNNN     e.g. b10819
-#                   graalvm:  must equal graalvm.txt's pin (GDS has no latest)
+#                   graalvm:  a JDK version on GDS  e.g. 25.0.4.1.1
 #                   flatcar-zfs-sysext: flatcar/zfs  e.g. 4593.2.5/2.4.4
 #                   oci-mirror: <name>:<tag>   e.g. cilium:v1.20.1
 #                   oci-<name>: <tag>          e.g. product=oci-cilium
@@ -19,8 +19,8 @@
 #                   (empty rebuilds every image/tool in the list at latest)
 #                   pulumi-plugins:            product=pulumi-plugins
 #                   pulumi-plugin-<name>:      product=pulumi-plugin-aws
-#                   (versions are pinned in pulumi-plugins.txt; a version
-#                   input must equal the pin)
+#                   (empty = the provider's latest release; a version input
+#                   builds that exact version)
 #   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT, GITHUB_EVENT_NAME
 #                   (schedule applies the 12h release bake-in window;
 #                   workflow_dispatch and local runs bypass it)
@@ -77,16 +77,15 @@ ci-tools)
 		force_all_tools=true
 	fi ;;
 pulumi-plugins)
-	# Every pin rebuilds; the versions live in pulumi-plugins.txt, so a
-	# version input is meaningless here.
+	# Every provider rebuilds at latest; a version input is meaningless here.
 	if [ -n "$force_version" ]; then
-		echo "check.sh: product=pulumi-plugins rebuilds every pin in pulumi-plugins.txt; use product=pulumi-plugin-<name> for one" >&2
+		echo "check.sh: product=pulumi-plugins rebuilds every provider in pulumi-plugins.txt at latest; use product=pulumi-plugin-<name> for one" >&2
 		exit 1
 	fi
 	force_all_pulumi_plugins=true ;;
 pulumi-plugin-*)
-	# pulumi-plugin-<name> forces that provider; a version input must equal
-	# the manifest pin.
+	# pulumi-plugin-<name> forces that provider; a version input builds that
+	# exact upstream release.
 	force_pulumi_plugin="${force_product#pulumi-plugin-}" ;;
 *)
 	# ci-tools product names are dynamic: a manifest name forces that tool.
@@ -171,6 +170,14 @@ to_epoch() {
 	date -d "$_te_d" +%s 2>/dev/null && return 0
 	date -j -f "%a, %d %b %Y %H:%M:%S GMT" "$1" +%s 2>/dev/null ||
 		date -j -f "%d %b %Y %H:%M" "$_te_d" +%s 2>/dev/null
+}
+
+# iso_epoch <ts> — epoch for ISO-8601 ("2026-09-21T22:07:22.000Z"), the GDS
+# timeCreated format. Parsed as UTC on both date flavors.
+iso_epoch() {
+	_ie_d=$(printf '%s' "$1" | sed 's/\.[0-9]*//; s/Z$//; s/T/ /')
+	TZ=UTC0 date -d "$_ie_d" +%s 2>/dev/null && return 0
+	TZ=UTC0 date -j -f "%Y-%m-%d %H:%M:%S" "$_ie_d" +%s 2>/dev/null
 }
 
 # tag_epoch <owner/repo> <tag> — when a git tag was cut: the tagger date for
@@ -318,19 +325,69 @@ decide aws-lc "$(force_or aws-lc "$(latest_gh aws/aws-lc 's/^v//')")"
 decide bun "$(force_or bun "$(latest_gh oven-sh/bun 's/^bun-v//')")"
 
 # ------------------------------------------------------------------- graalvm
-# Oracle GDS exposes no "latest" — artifact ids are immutable per bundle and
-# pinned (with sha256s) in graalvm.txt, so the manifest IS the version source.
-# A forced version must equal it: repack can only build the pinned artifacts.
-graalvm_v=$(awk 'NF && $1 !~ /^#/ && $1 == "version" { print $2; exit }' \
-	"$script_dir/graalvm.txt")
+# Oracle GraalVM for JDK, resolved from the GDS artifact API — the same
+# endpoint setup-graalvm queries, so "latest" is real. Items carry the
+# artifact id, its sha256 (checksum), and timeCreated; the JDK version itself
+# only exists in the artifact filename, resolved via a HEAD on the content
+# URL. The newest JDK version published for all three platforms (and outside
+# the bake-in window) wins — a staged platform rollout falls back to the
+# newest version they share. A forced version is a JDK version GDS still
+# publishes for every platform.
+ensure_cmds curl jq
+gds_base=https://gds.oracle.com/api/20220101/artifacts
+gds_query='productId=D53FAE8052773FFAE0530F15000AA6C6&metadata=edition:ee&metadata=isBase:True&status=PUBLISHED&responseFields=id&responseFields=checksum&responseFields=metadata&responseFields=timeCreated&displayName=Oracle%20GraalVM&sortBy=timeCreated&sortOrder=DESC&limit=15'
+gds_jdk_version() { # <artifact-id> -> JDK version inside the artifact filename
+	curl -fsSI --retry 3 --max-time 30 "$gds_base/$1/content" |
+	sed -n 's|.*graalvm-jdk-||; s|_[a-z0-9]*-[a-z0-9]*_bin\.tar\.gz.*||p' |
+	sed 's/.*-//'
+}
+graalvm_candidates() { # <os> <arch> -> "jdkver id sha" rows, newest first
+	curl -fsSL --retry 3 --max-time 60 "$gds_base?$gds_query&metadata=os:$1&metadata=arch:$2" |
+	jq -r '.items[] | [.id, .checksum, .timeCreated // ""] | @tsv' |
+	while read -r _g_id _g_sha _g_tc; do
+		_g_e=$(iso_epoch "$_g_tc") || continue
+		[ -n "$_g_e" ] && [ "$_g_e" -le "$release_cutoff" ] || continue
+		_g_v=$(gds_jdk_version "$_g_id") || continue
+		# GDS lists some gated artifacts whose /content 401s — skip them.
+		[ -n "$_g_v" ] || continue
+		printf '%s %s %s\n' "$_g_v" "$_g_id" "$_g_sha"
+	done | awk '!seen[$1]++'
+}
+glx=$(graalvm_candidates linux amd64)
+gar=$(graalvm_candidates linux aarch64)
+gma=$(graalvm_candidates macos aarch64)
+if [ "$force_product" = graalvm ] && [ -n "$force_version" ]; then
+	graalvm_v=$force_version
+	for _g_list in "$glx" "$gar" "$gma"; do
+		printf '%s\n' "$_g_list" | awk -v v="$graalvm_v" '$1==v{f=1} END{exit !f}' || {
+			echo "check.sh: GDS has no $graalvm_v artifact for all platforms" >&2
+			exit 1
+		}
+	done
+else
+	graalvm_v=$(printf '%s\n' "$glx" | cut -d' ' -f1 | sort -uVr |
+		while read -r _g_v; do
+			# shellcheck disable=SC2015 # || continue is the intended either-failed path
+			printf '%s\n' "$gar" | cut -d' ' -f1 | grep -qx "$_g_v" &&
+				printf '%s\n' "$gma" | cut -d' ' -f1 | grep -qx "$_g_v" || continue
+			printf '%s\n' "$_g_v"
+			break
+		done)
+fi
 [ -n "$graalvm_v" ] || {
-	echo "check.sh: no version row in scripts/graalvm.txt" >&2
+	echo "check.sh: no GraalVM version on GDS for all platforms" >&2
 	exit 1
 }
-if [ "$force_product" = graalvm ] && [ -n "$force_version" ] && [ "$force_version" != "$graalvm_v" ]; then
-	echo "check.sh: graalvm artifacts are pinned in graalvm.txt (currently $graalvm_v) — update the manifest to bump" >&2
-	exit 1
-fi
+_g_row() { awk -v v="$graalvm_v" '$1==v{print $2, $3; exit}'; }
+glx_row=$(printf '%s\n' "$glx" | _g_row)
+gar_row=$(printf '%s\n' "$gar" | _g_row)
+gma_row=$(printf '%s\n' "$gma" | _g_row)
+graalvm_artifacts=$(jq -nc \
+	--arg i1 "${glx_row%% *}" --arg s1 "${glx_row##* }" \
+	--arg i2 "${gar_row%% *}" --arg s2 "${gar_row##* }" \
+	--arg i3 "${gma_row%% *}" --arg s3 "${gma_row##* }" \
+	'{"linux-x64":{id:$i1,sha:$s1},"linux-arm64":{id:$i2,sha:$s2},"darwin-arm64":{id:$i3,sha:$s3}}')
+printf 'graalvm_artifacts=%s\n' "$graalvm_artifacts" >>"$out"
 decide graalvm "$graalvm_v"
 
 # ------------------------------------------------------------------- zlib-ng
@@ -462,10 +519,19 @@ decide llama-embedding "$llama_v"
 
 # -------------------------------------------------------------------- mysql
 # Repack of Oracle's "Linux - Generic" binaries for MySQL test lanes.
-# Tracks mysql-server's 9.x git tags; the CDN tarball can lag the tag, so the
-# newest tag clearing the bake-in window whose tarball is published wins.
-mysql_v=$(git ls-remote --tags https://github.com/mysql/mysql-server 'refs/tags/mysql-9.*' |
-	sed 's|.*refs/tags/mysql-||' | grep -E '^9\.[0-9]+\.[0-9]+$' | sort -uVr | head -15 |
+# Tracks the latest LTS line: Oracle's apt repo names its LTS components
+# mysql-<line>-lts, so the highest is the current LTS series (9.7 today;
+# 8.4 is the older LTS, the rest of 9.x is Innovation). Within the line, the
+# newest tag clearing the bake-in window whose generic tarball is published
+# wins — the CDN tarball can lag the git tag.
+mysql_lts=$(curl -fsSL --retry 3 https://repo.mysql.com/apt/ubuntu/dists/noble/Release |
+	grep -oE 'mysql-[0-9]+\.[0-9]+-lts' | sed 's/^mysql-//; s/-lts$//' | sort -uVr | head -1)
+[ -n "$mysql_lts" ] || {
+	echo "check.sh: no mysql-*-lts component in the upstream apt repo" >&2
+	exit 1
+}
+mysql_v=$(git ls-remote --tags https://github.com/mysql/mysql-server "refs/tags/mysql-${mysql_lts}.*" |
+	sed 's|.*refs/tags/mysql-||' | grep -E "^${mysql_lts}\.[0-9]+$" | sort -uVr | head -15 |
 	while IFS= read -r _m_v; do
 		_m_e=$(tag_epoch mysql/mysql-server "mysql-$_m_v") || continue
 		[ -n "$_m_e" ] && [ "$_m_e" -le "$release_cutoff" ] || continue
@@ -889,12 +955,10 @@ fi
 printf 'tools_build=%s\ntools_matrix={"include":[%s]}\n' "$tools_build" "$tools_matrix" >>"$out"
 
 # ---------------------------------------------------------- pulumi plugins
-# Pulumi resource provider binaries the deployments use, pinned in
-# pulumi-plugins.txt (<name> <version> <gh-repo>). The manifest is the version
-# source (like graalvm.txt), so there is no upstream resolution and no bake-in
-# window: a bump is a manifest edit, and the next run builds the missing
-# release. Output is a build matrix per (provider, platform) plus a release
-# matrix per provider.
+# Pulumi resource provider binaries the deployments use: one row per provider
+# in pulumi-plugins.txt (<name> <gh-repo>), tracked at the repo's latest
+# GitHub release. Output is a build matrix per (provider, platform) plus a
+# release matrix per provider.
 pulumi_plugins_file="$script_dir/pulumi-plugins.txt"
 pulumi_plugins_platforms="linux-x64 linux-arm64 darwin-arm64"
 pulumi_plugins_matrix=
@@ -902,7 +966,7 @@ pulumi_plugins_images_matrix=
 pulumi_plugins_build=false
 pulumi_plugins_names=
 pulumi_plugins_matched_force=false
-while read -r pp_name pp_ver pp_repo || [ -n "$pp_name" ]; do
+while read -r pp_name pp_repo || [ -n "$pp_name" ]; do
 	case "$pp_name" in '' | '#'*) continue ;; esac
 	case " $pulumi_plugins_names " in
 	*" $pp_name "*)
@@ -910,22 +974,30 @@ while read -r pp_name pp_ver pp_repo || [ -n "$pp_name" ]; do
 		exit 1 ;;
 	esac
 	pulumi_plugins_names="$pulumi_plugins_names $pp_name"
-	[ -n "$pp_ver" ] && [ -n "$pp_repo" ] || {
-		echo "check.sh: bad pulumi-plugins.txt line: '$pp_name $pp_ver $pp_repo'" >&2
+	[ -n "$pp_repo" ] || {
+		echo "check.sh: bad pulumi-plugins.txt line: '$pp_name $pp_repo'" >&2
 		exit 1
 	}
+	forced=false
+	pp_ver=
 	if [ "$pp_name" = "$force_pulumi_plugin" ]; then
 		pulumi_plugins_matched_force=true
-		[ -z "$force_version" ] || [ "$force_version" = "$pp_ver" ] || {
-			echo "check.sh: pulumi plugin versions are pinned in pulumi-plugins.txt (currently $pp_ver) — update the manifest to bump" >&2
-			exit 1
-		}
-	fi
-	forced=false
-	if [ "$pp_name" = "$force_pulumi_plugin" ] ||
-		[ "$force_all_pulumi_plugins" = true ]; then
+		forced=true
+		if [ -n "$force_version" ]; then
+			pp_ver=${force_version#v}
+			gh api "repos/$pp_repo/releases/tags/v$pp_ver" >/dev/null 2>&1 || {
+				echo "check.sh: no upstream release $pp_repo v$pp_ver" >&2
+				exit 1
+			}
+		fi
+	elif [ "$force_all_pulumi_plugins" = true ]; then
 		forced=true
 	fi
+	[ -n "$pp_ver" ] || pp_ver=$(latest_gh "$pp_repo" 's/^v//')
+	[ -n "$pp_ver" ] || {
+		echo "check.sh: failed to resolve a version for pulumi-plugin-$pp_name" >&2
+		exit 1
+	}
 	if [ "$forced" = true ] ||
 		! printf '%s\n' "$existing_tags" | grep -qxF "pulumi-plugin-$pp_name/v$pp_ver"; then
 		pulumi_plugins_build=true

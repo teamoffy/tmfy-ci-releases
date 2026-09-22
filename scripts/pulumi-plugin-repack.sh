@@ -3,14 +3,15 @@
 # release tarball, verify it against its GitHub asset digest, extract the
 # pulumi-resource-<name> binary, stage it at usr/local/bin/, and pack a
 # max-zstd tar.zst (extract at / to install into /usr/local/bin).
-# usage: pulumi-plugin-repack.sh <name>   e.g. pulumi-plugin-repack.sh aws
+# usage: pulumi-plugin-repack.sh <name> <version>   e.g. pulumi-plugin-repack.sh aws 7.46.0
 # env:
 #   PULUMI_PLUGIN_PLATFORM  house platform label (required):
 #                           linux-x64 | linux-arm64 | darwin-arm64
 #   PULUMI_PLUGIN_WORK      work dir (default .pulumi-plugin-work)
 #   GH_TOKEN                GitHub token (asset digests come from the API)
 set -eu
-name="${1:?usage: pulumi-plugin-repack.sh <name>}"
+name="${1:?usage: pulumi-plugin-repack.sh <name> <version>}"
+version="${2:?usage: pulumi-plugin-repack.sh <name> <version>}"
 platform="${PULUMI_PLUGIN_PLATFORM:?PULUMI_PLUGIN_PLATFORM must be set (linux-x64|linux-arm64|darwin-arm64)}"
 work="${PULUMI_PLUGIN_WORK:-$PWD/.pulumi-plugin-work}"
 out="$work/out"
@@ -32,16 +33,18 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$script_dir/lib.sh"
 
-# <name> <version> <gh-repo> — comments/blank lines skipped.
-version=
+# <name> <gh-repo> — comments/blank lines skipped.
 repo=
-while read -r n v r _; do
+while read -r n r _; do
 	[ "$n" = "$name" ] || continue
-	version=$v
 	repo=$r
 done <"$script_dir/pulumi-plugins.txt"
 [ -n "$repo" ] || {
 	echo "pulumi-plugin-repack.sh: '$name' is not in pulumi-plugins.txt" >&2
+	exit 2
+}
+printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+	echo "pulumi-plugin-repack.sh: invalid version '$version'" >&2
 	exit 2
 }
 

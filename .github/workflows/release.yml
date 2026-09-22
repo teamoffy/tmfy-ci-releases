@@ -27,18 +27,18 @@ on:
           valkey: server/bloom e.g. 9.1.2/1.0.1
           libgit2: libgit2/libssh2 e.g. 1.9.7/1.11.1
           llama-embedding: bNNNN e.g. b10819
-          mysql: the upstream version e.g. 9.7.2 (empty = newest 9.x tag with a
-          published generic tarball)
+          mysql: the upstream version e.g. 9.7.2 (empty = newest LTS point
+          release with a published generic tarball)
           oci-mirror: name:tag from oci-images.txt e.g. cilium:v1.20.1
           oci-<name>: the image tag e.g. v1.20.1 (empty = newest servable
           upstream release)
-          graalvm: must equal the version pinned in graalvm.txt — GDS has no
-          "latest", so the manifest is bumped to change versions
+          graalvm: the JDK version e.g. 25.0.4.1.1 (empty = newest version
+          published on GDS for all platforms)
           flatcar-zfs-sysext: flatcar/zfs e.g. 4593.2.5/2.4.4
           ci-tools or <tool name>: the upstream tag e.g. kubectl:v1.36.4
           (empty ci-tools rebuilds every tool in ci-tools.txt at latest)
-          pulumi-plugins: no version (pins live in pulumi-plugins.txt);
-          pulumi-plugin-<name>: must equal the manifest pin
+          pulumi-plugins: no version (rebuilds every provider at latest);
+          pulumi-plugin-<name>: the provider version (empty = latest)
         required: false
         type: string
 
@@ -63,6 +63,7 @@ jobs:
       bun_version: ${{ steps.resolve.outputs.bun_version }}
       bun_build: ${{ steps.resolve.outputs.bun_build }}
       graalvm_version: ${{ steps.resolve.outputs.graalvm_version }}
+      graalvm_artifacts: ${{ steps.resolve.outputs.graalvm_artifacts }}
       graalvm_build: ${{ steps.resolve.outputs.graalvm_build }}
       zlib_ng_version: ${{ steps.resolve.outputs.zlib_ng_version }}
       zlib_ng_build: ${{ steps.resolve.outputs.zlib_ng_build }}
@@ -269,8 +270,8 @@ jobs:
           EOF
 
   # --------------------------------------------------------------- graalvm
-  # GDS bundles exist for linux-x64, linux-arm64, and macos-arm64 only —
-  # graalvm.txt's platform rows are the matrix.
+  # check.sh resolves the newest JDK version GDS publishes for all three
+  # platforms plus each platform's artifact id + sha256 (graalvm_artifacts).
   build-graalvm:
     needs: check
     if: needs.check.outputs.graalvm_build == 'true'
@@ -288,8 +289,14 @@ jobs:
       - name: Repack GraalVM bundle
         env:
           GRAALVM_WORK: ${{ runner.temp }}/graalvm-work
-          GRAALVM_PLATFORMS: ${{ matrix.platform }}
-        run: sh scripts/graalvm-repack.sh "${{ needs.check.outputs.graalvm_version }}"
+          GRAALVM_ARTIFACTS: ${{ needs.check.outputs.graalvm_artifacts }}
+        run: |
+          spec=$(printf '%s' "$GRAALVM_ARTIFACTS" | \
+            jq -r --arg p "${{ matrix.platform }}" '.[$p].id + " " + .[$p].sha')
+          # shellcheck disable=SC2086 # "id sha" word-split intended
+          sh scripts/graalvm-repack.sh \
+            "${{ needs.check.outputs.graalvm_version }}" \
+            "${{ matrix.platform }}" $spec
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -324,10 +331,10 @@ jobs:
         run: |
           set -eu
           sh scripts/publish-release.sh "graalvm/v${VERSION}" "graalvm v${VERSION}" assets <<EOF
-          Oracle GraalVM for JDK ${VERSION} repacked from the pinned GDS artifacts as max-zstd (level 22) tar.zst.
+          Oracle GraalVM for JDK ${VERSION} repacked from the GDS artifacts as max-zstd (level 22) tar.zst.
 
-          - Upstream: https://www.oracle.com/downloads/graalvm-downloads.html (GDS artifact ids + sha256 pins in scripts/graalvm.txt)
-          - Upstream checksums were verified before repacking (sha256 pin + opc-meta-content-sha256 object metadata cross-check).
+          - Upstream: https://www.oracle.com/downloads/graalvm-downloads.html (artifact ids + sha256 resolved from the GDS artifacts API — the same endpoint graalvm/setup-graalvm uses)
+          - Upstream checksums were verified before repacking (GDS checksum field + opc-meta-content-sha256 object metadata cross-check).
           - Platforms: linux-x64, linux-arm64, darwin-arm64 — no linux-x86-32, no darwin-x64, no Windows (matching supported runner targets).
           - Layout: the archive root is \`home/\`, the JDK home itself (\`home/bin/java\`); the macOS bundle's \`Contents/Home\` nesting is flattened to the same contract. Extract at the destination: \`tar --zstd -xf <asset> -C <dest>\` gives \`<dest>/home/bin/java\`.
           - Extraction needs zstd (preinstalled on GitHub runner images).
@@ -1541,7 +1548,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PULUMI_PLUGIN_PLATFORM: ${{ matrix.platform }}
           PULUMI_PLUGIN_WORK: ${{ runner.temp }}/pulumi-plugin-work
-        run: sh scripts/pulumi-plugin-repack.sh "${{ matrix.name }}"
+        run: sh scripts/pulumi-plugin-repack.sh "${{ matrix.name }}" "${{ matrix.version }}"
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

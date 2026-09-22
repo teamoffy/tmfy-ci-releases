@@ -1,11 +1,11 @@
-# Pulumi resource provider binaries used by the deployments, one row per
+# Pulumi resource provider binaries the deployments use, one row per
 # provider:
 #
-#   <name> <version> <gh-repo>
+#   <name> <gh-repo>
 #
-# The version is pinned, not tracked (like graalvm.txt): bump the row when the
-# deployment bumps its provider, and the next run mirrors the missing release
-# as pulumi-plugin-<name>/v<version>. Assets are
+# Tracked at the repo's latest GitHub release (with the scheduled 12h bake-in
+# window); the next run after a new provider release mirrors it as
+# pulumi-plugin-<name>/v<version>. Assets are
 # pulumi-plugin-<name>-<version>-<linux-x64|linux-arm64|darwin-arm64>.tar.zst,
 # staging pulumi-resource-<name> at usr/local/bin/ (extract at /).
 #
@@ -13,12 +13,12 @@
 # from the row's <gh-repo> release, verified against its GitHub asset digest.
 # Providers whose SDKs reuse another provider's plugin need no row of their
 # own: the CRD extension SDKs all use the `kubernetes` binary.
-alicloud           3.108.0 pulumi/pulumi-alicloud
-aws                7.46.0  pulumi/pulumi-aws
-cloudflare         6.20.0  pulumi/pulumi-cloudflare
-gcp                9.37.0  pulumi/pulumi-gcp
-kubernetes         4.34.2  pulumi/pulumi-kubernetes
-oci                5.0.0   pulumi/pulumi-oci
-random             4.21.2  pulumi/pulumi-random
-terraform-provider 1.1.3   pulumi/pulumi-terraform-provider
-upcloud            0.19.1  UpCloudLtd/pulumi-upcloud
+alicloud           pulumi/pulumi-alicloud
+aws                pulumi/pulumi-aws
+cloudflare         pulumi/pulumi-cloudflare
+gcp                pulumi/pulumi-gcp
+kubernetes         pulumi/pulumi-kubernetes
+oci                pulumi/pulumi-oci
+random             pulumi/pulumi-random
+terraform-provider pulumi/pulumi-terraform-provider
+upcloud            UpCloudLtd/pulumi-upcloud

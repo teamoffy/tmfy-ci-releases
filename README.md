@@ -16,10 +16,10 @@ matrix. The newest 45 releases per product are kept.
 |---|---|---|---|
 | aws-lc | [aws/aws-lc](https://github.com/aws/aws-lc) | linux-x64, linux-arm64, darwin-arm64 | `/opt/aws-lc` |
 | bun | [oven-sh/bun](https://github.com/oven-sh/bun) | linux-x64, linux-aarch64, darwin-x64, darwin-aarch64 | `bun-<platform>/` |
-| graalvm | [Oracle GraalVM for JDK](https://www.oracle.com/downloads/graalvm-downloads.html) GDS pins ([`graalvm.txt`](scripts/graalvm.txt)) | linux-x64, linux-arm64, darwin-arm64 | `home/` (the JDK home) |
+| graalvm | [Oracle GraalVM for JDK](https://www.oracle.com/downloads/graalvm-downloads.html) via the GDS artifacts API | linux-x64, linux-arm64, darwin-arm64 | `home/` (the JDK home) |
 | zlib-ng | [zlib-ng/zlib-ng](https://github.com/zlib-ng/zlib-ng) | linux-x64, linux-arm64, darwin-arm64 | `/opt/zlib-ng` |
 | postgres | PostgreSQL 18.x + timescaledb + pgvector + VectorChord | linux-x64, linux-arm64 | `/opt/postgresql` |
-| mysql | [MySQL](https://github.com/mysql/mysql-server) 9.x "Linux - Generic" repack | linux-arm64 | `/opt/mysql` |
+| mysql | [MySQL](https://github.com/mysql/mysql-server) latest LTS "Linux - Generic" repack | linux-arm64 | `/opt/mysql` |
 | valkey | [valkey](https://github.com/valkey-io/valkey) + valkey-bloom | linux-x64, linux-arm64 | `/opt/valkey` |
 | clickhouse | [ClickHouse](https://github.com/ClickHouse/ClickHouse) LTS tags | linux-x64, linux-arm64 | `/opt/clickhouse` |
 | pebble | [letsencrypt/pebble](https://github.com/letsencrypt/pebble) | linux-x64, linux-arm64 | `/opt/pebble` |
@@ -33,7 +33,7 @@ matrix. The newest 45 releases per product are kept.
 | flatcar | [Flatcar stable channel](https://www.flatcar.org/releases/) | verbatim upstream files, amd64 + arm64 | — |
 | flatcar-zfs-sysext | Flatcar stable + [openzfs/zfs](https://github.com/openzfs/zfs) | squashfs `.raw`, amd64 + arm64 | `/etc/extensions` |
 | ci-tools | see [`ci-tools.txt`](scripts/ci-tools.txt) | linux-x64, linux-arm64 | `usr/local/bin`, `opt/` |
-| `pulumi-plugin-<name>` | Pulumi resource providers pinned in [`pulumi-plugins.txt`](scripts/pulumi-plugins.txt) | linux-x64, linux-arm64, darwin-arm64 | `usr/local/bin` |
+| `pulumi-plugin-<name>` | Pulumi resource providers in [`pulumi-plugins.txt`](scripts/pulumi-plugins.txt) (latest release of each) | linux-x64, linux-arm64, darwin-arm64 | `usr/local/bin` |
 
 Version tracking:
 
@@ -46,13 +46,15 @@ Version tracking:
   current release (`amd64-usr/current/version.txt`), not a GitHub repo —
   Flatcar has no releases API. The sysext version is the combo
   `<flatcar>-zfs<zfs>`.
-- **graalvm** has no upstream "latest" either: Oracle GDS artifact ids are
-  immutable per bundle, so the version and per-platform sha256 pins live in
-  [`graalvm.txt`](scripts/graalvm.txt) — a bump is a manifest edit followed by
-  a forced `graalvm` rebuild.
-- **pulumi-plugin-<name>** versions are pinned in
-  [`pulumi-plugins.txt`](scripts/pulumi-plugins.txt) — a bump is a manifest
-  edit, and the next run mirrors the missing release.
+- **graalvm** has no `releases/latest`-style upstream either: Oracle GDS
+  bundles are content-addressed artifacts, so the newest JDK version
+  published for all three platforms is resolved through the GDS artifacts
+  API (the same endpoint `graalvm/setup-graalvm` uses) — artifact ids and
+  sha256s come straight from the API at check time.
+- **mysql** tracks the latest LTS line, not the Innovation stream: Oracle's
+  apt repo names its LTS components `mysql-<line>-lts`, so the highest is
+  the current LTS series (9.7 today); within it, the newest git tag whose
+  generic tarball is actually published wins — the CDN can lag the tag.
 
 ## Mirrored node boot artifacts
 
@@ -97,16 +99,15 @@ each tracks its own latest independently; the whole set force-rebuilds via
 
 ## Pulumi provider plugins
 
-`pulumi-plugins.txt` pins the Pulumi resource provider binaries the deployments
-use, one row per provider (`<name> <version> <gh-repo>`). Each upstream release
-tarball (`pulumi-resource-<name>-v<version>-<os>-<arch>.tar.gz`) is verified
-against its GitHub asset digest and repacked as max-zstd (level 22) tar.zst for
-linux-x64, linux-arm64, and darwin-arm64; the binary is staged at
-`usr/local/bin/`, so extract at `/`. Releases are
-`pulumi-plugin-<name>/v<version>`. Versions are pinned, not tracked: a provider
-bump edits the manifest and the next run builds the missing release. Several
-SDKs share one provider plugin — the CRD extension SDKs all use `kubernetes` —
-so they resolve to that single release.
+`pulumi-plugins.txt` lists the Pulumi resource provider binaries the deployments
+use, one row per provider (`<name> <gh-repo>`). Each provider tracks its repo's
+latest GitHub release. Each upstream release tarball
+(`pulumi-resource-<name>-v<version>-<os>-<arch>.tar.gz`) is verified against its
+GitHub asset digest and repacked as max-zstd (level 22) tar.zst for linux-x64,
+linux-arm64, and darwin-arm64; the binary is staged at `usr/local/bin/`, so
+extract at `/`. Releases are `pulumi-plugin-<name>/v<version>`. Several SDKs
+share one provider plugin — the CRD extension SDKs all use `kubernetes` — so
+they resolve to that single release.
 
 ## OCI image mirrors
 
@@ -129,8 +130,13 @@ skipped because the deployment disables them.
 
 ## Per-cloud stacks
 
-[`stacks.txt`](scripts/stacks.txt) declares the k3s and node-image versions for
-each cloud. Clouds can move to a new k8s version independently.
+[`stacks.txt`](scripts/stacks.txt) declares the k3s and node-image versions
+*deployed* in each cloud — deployment pins, not version tracking. A stack's
+images must align with its k3s minor (and its cloud CCM/CSI), so each cloud
+moves to a new k8s version deliberately and independently. The distinction
+from `oci-images.txt`: that file is the mirror set tracked at upstream
+latest; these rows pick which mirrored version each cloud runs (a stack row
+with no release yet queues that exact version).
 
 A stack is queued only when every row is available upstream or already has an
 exact release here. A `k3s` row covers the k3s files, the k3s-system images,
@@ -161,11 +167,13 @@ an S3 registry sync or `skopeo copy oci:... oci-archive:...` for
 Release tags are `<product>/v<version>`. Native-product assets are named
 `<product>-<version>-<platform>.tar.zst` and use `tar | zstd --ultra -22`; OCI
 asset names and layouts are described above. Every release ships
-`SHA256SUMS.txt`. Product archives embed `BUILD-INFO.txt` with upstream URLs,
-checksums, and the build recipe. Bun preserves the upstream archive layout,
-GraalVM repacks the upstream JDK home as-is, and OCI assets are self-contained
-image layouts, so none of those carries `BUILD-INFO.txt`; their provenance is
-recorded in the release notes. `zstd` is
+`SHA256SUMS.txt`. Compiled-product archives embed `BUILD-INFO.txt` with
+upstream URLs, checksums, and the build recipe. Bun preserves the upstream
+archive layout, GraalVM repacks the upstream JDK home as-is, the verbatim
+mirrors (k3s, flatcar) ship upstream files untouched, the ci-tools and
+pulumi-plugin repacks carry only their staged binaries, and OCI assets are
+self-contained image layouts — none of those carries `BUILD-INFO.txt`; their
+provenance is recorded in the release notes. `zstd` is
 preinstalled on `ubuntu-24.04+` and `macos-15+` runners, so
 `tar --zstd -xf` works out of the box.
 
@@ -209,12 +217,12 @@ Product notes:
   `install bun-<platform>/bun ~/.bun/bin/bun`. Inside Actions, pinning a version
   in `oven-sh/setup-bun` is usually simpler, since its cache only engages for
   pinned versions; this mirror is for cold starts and non-Actions use.
-- **graalvm**: repack of the pinned Oracle GDS JDK bundles. The archive root is
-  `home/`, so extract at the destination
-  (`tar --zstd -xf <asset> -C <dest>`) and use `<dest>/home` as `JAVA_HOME`
-  (`<dest>/home/bin/java`); the macOS bundle's `Contents/Home` nesting is
-  flattened to the same layout. GDS has no "latest" — version bumps edit
-  `scripts/graalvm.txt` and force-rebuild `graalvm`.
+- **graalvm**: repack of Oracle GDS JDK bundles resolved at check time (the
+  newest JDK version published for all platforms; artifact id + sha256 come
+  from the GDS API). The archive root is `home/`, so extract at the
+  destination (`tar --zstd -xf <asset> -C <dest>`) and use `<dest>/home` as
+  `JAVA_HOME` (`<dest>/home/bin/java`); the macOS bundle's `Contents/Home`
+  nesting is flattened to the same layout.
 - **sqlite-vec**: repack of upstream's loadable `vec0` extension at
   `opt/sqlite-vec/lib/vec0.so` (`vec0.dylib` on macOS). Verified against
   upstream `checksums.txt` and smoke-tested by loading the extension
