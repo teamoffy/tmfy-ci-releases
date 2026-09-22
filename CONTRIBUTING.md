@@ -2,8 +2,8 @@
 
 ## Pipeline
 
-One workflow ([`release.yml`](.github/workflows/release.yml)), one daily run
-(06:17 UTC), 40 jobs:
+One workflow ([`release.yml`](.github/workflows/release.yml)), one run every
+2nd day (06:17 UTC), 42 jobs:
 
 1. **check** — resolves every product's target version from upstream (GitHub
    releases where they exist, git tags or index listings where they don't, and
@@ -13,7 +13,11 @@ One workflow ([`release.yml`](.github/workflows/release.yml)), one daily run
    `ci-tools.txt` tools it emits a dynamic build matrix of what's missing.
    It also checks [`stacks.txt`](scripts/stacks.txt). A stack is added to the
    build matrices only when all of its pinned versions are available upstream
-   or already released here.
+   or already released here. Scheduled runs only mirror upstream releases at
+   least 12h old: resolution falls back to the previous release where the
+   source has history (Flatcar's channel does not, so it defers instead),
+   `stacks.txt` pins are human-vetted and exempt, and `workflow_dispatch`
+   runs bypass the window — forcing a version is the escape route.
 2. **build-\<product\>** — one parallel job per product with its own platform
    matrix. `fail-fast: false` lets the other targets finish if one target fails.
    Every product is smoke-tested before publishing: compiled-and-run for the
@@ -29,7 +33,7 @@ One workflow ([`release.yml`](.github/workflows/release.yml)), one daily run
 
 Dispatch `release.yml` with `product` set — that product always rebuilds and
 replaces its release assets and notes in place, while the rest get their normal
-daily check.
+scheduled check.
 `version` is optional (upstream latest if empty); multi-component products
 take slash-joined versions: postgres `18.6/2.29.2/0.8.6/1.1.1`, valkey
 `9.1.2/1.0.1`, libgit2 `1.9.7/1.11.1`, flatcar-zfs-sysext `4593.2.5/2.4.4`.
@@ -70,19 +74,19 @@ target, so bump them deliberately via a forced version.
   fails if a pinned tag is unavailable.
 - `oci-mirror.sh <name> <repo:tag>` — `skopeo copy` re-encode of one upstream
   image's linux platforms to a zstd:chunked OCI layout (windows/darwin index
-  entries are dropped — multi-GB layers no tea node can pull), layer-format
-  verification, then `pack.sh` at level 12 (the blobs are already compressed)
-  to a `-oci.tar.zst` asset plus a `release-info.env` provenance file.
-  Takes an `OCI_WORK` work dir.
+  entries are dropped: the nodes only pull linux, and the Windows variants
+  carry multi-GB layers). Layer-format verification follows, then `pack.sh`
+  level 12 (the blobs are already compressed) to a `-oci.tar.zst` asset plus a
+  `release-info.env` provenance file. Takes an `OCI_WORK` work dir.
 - `k3s-mirror.sh <version>` — verbatim mirror of the k3s node binaries, zstd
   airgap tarballs, `k3s-images.txt`, and `install.sh`; binaries/airgap are
   verified against upstream `sha256sum-<arch>.txt` and everything else against
   GitHub asset digests. Takes `K3S_WORK` and `GH_TOKEN`.
 - k3s-system images — `check.sh` resolves each built k3s version's image list
-  from its own `k3s-images.txt` (minus the components tea disables) into the
-  `k3s_system_images_matrix`; `build-k3s-system` runs `oci-mirror.sh` per
-  (version, image) cell and `release-k3s-system` merges a version's cells
-  into one `k3s-system/v<version>` release.
+  from its own `k3s-images.txt` (minus the components the deployment
+  disables) into the `k3s_system_images_matrix`; `build-k3s-system` runs
+  `oci-mirror.sh` per (version, image) cell and `release-k3s-system` merges a
+  version's cells into one `k3s-system/v<version>` release.
 - `stacks.txt` — per-cloud deployed node sets: `<stack> <product> <tag>` per
   line. Clouds track k8s versions independently. `check.sh` probes every row
   and queues the stack only if each release already exists or its upstream tag
@@ -122,10 +126,11 @@ target, so bump them deliberately via a forced version.
   pack a tar.zst. Takes `GRAALVM_WORK`, `GRAALVM_PLATFORMS`.
 - `<product>-build.sh <version>...` — build, smoke-test, and pack one product.
   The mirrors use `*-repack.sh` instead (`bun-repack.sh`, `graalvm-repack.sh`,
-  `sqlite-vec-repack.sh`, `llama-embedding-repack.sh`): they verify upstream
-  checksums where published and re-archive rather than compile. sqlite-vec and
-  llama-embedding repack on each target's native runner so their smoke tests
-  (loading `vec0`, running `llama-cli`) exercise the packaged binaries.
+  `mysql-repack.sh`, `sqlite-vec-repack.sh`, `llama-embedding-repack.sh`):
+  they verify upstream checksums where published and re-archive rather than
+  compile. sqlite-vec and llama-embedding repack on each target's native
+  runner so their smoke tests (loading `vec0`, running `llama-cli`) exercise
+  the packaged binaries.
   Multi-component products take one arg per component (postgres 4, valkey 2,
   libgit2 2). Each takes a `*_PLATFORM` env (e.g. `linux-x64`) and a `*_WORK`
   work dir.
@@ -160,9 +165,9 @@ What runs where:
   bundles on the Linux runner for all three platforms — the repack is
   platform-independent, and its post-pack check re-extracts `home/bin/java`
   rather than executing the JDK.
-- **Published Linux-only targets** — postgres, valkey, clickhouse, pebble,
-  typesense, libgit2, and flatcar-zfs-sysext. The first five and the sysext
-  build reject non-Linux hosts; the sysext build additionally needs
+- **Published Linux-only targets** — postgres, mysql, valkey, clickhouse,
+  pebble, typesense, libgit2, and flatcar-zfs-sysext. The first six and the
+  sysext build reject non-Linux hosts; the sysext build additionally needs
   `systemd-nspawn`/`squashfs-tools`/`kmod` (installed via apt) and must run on
   the same architecture it targets — a kernel module is not cross-built. The
   libgit2 script also has a macOS build path for local testing, but the release

@@ -17,7 +17,9 @@
 #                   ci-tools:   <name>:<tag>   e.g. kubectl:v1.36.4
 #                   <tool name>: <tag>          e.g. product=kubectl
 #                   (empty rebuilds every image/tool in the list at latest)
-#   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT
+#   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT, GITHUB_EVENT_NAME
+#                   (schedule applies the 12h release bake-in window;
+#                   workflow_dispatch and local runs bypass it)
 set -eu
 repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}"
 out="${GITHUB_OUTPUT:?GITHUB_OUTPUT must be set}"
@@ -38,7 +40,7 @@ force_tool=
 force_tool_tag=
 force_all_tools=false
 case "$force_product" in
-"" | aws-lc | bun | graalvm | zlib-ng | postgres | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext) ;;
+"" | aws-lc | bun | graalvm | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext) ;;
 oci-mirror)
 	if [ -n "$force_version" ]; then
 		case "$force_version" in
@@ -99,8 +101,73 @@ if [ -n "$force_tool_tag" ]; then
 	case "$force_tool_tag" in v* | RELEASE*) ;; *) force_tool_tag="v$force_tool_tag" ;; esac
 fi
 
-latest_gh() { # <owner/repo> <sed expr>
-	gh api "repos/$1/releases/latest" --jq '.tag_name' | sed "$2"
+# ------------------------------------------------------- release bake-in
+# Scheduled runs only mirror upstream releases at least 12h old: a pulled or
+# compromised release usually disappears within hours, so the window keeps
+# the mirrors from racing it. Resolution falls back to the previous release
+# where the source has history; Flatcar's channel does not, so it defers.
+# workflow_dispatch and local runs bypass the window (the escape route), and
+# stacks.txt pins are human-vetted, so they are exempt too.
+if [ "${GITHUB_EVENT_NAME:-}" = schedule ]; then
+	release_min_age=43200 # 12h
+else
+	release_min_age=0
+fi
+release_cutoff=$(($(date +%s) - release_min_age))
+cutoff_ymd=$(date -u -d "@$release_cutoff" +%F 2>/dev/null ||
+	date -u -r "$release_cutoff" +%F)
+# jq predicate over gh api release objects: published_at clears the window.
+jq_aged="(.published_at | fromdateiso8601) <= $release_cutoff"
+
+# latest_gh <owner/repo> <sed expr> — upstream's newest release. GitHub's
+# releases/latest resolves by release line, so a backport patch on an older
+# line does not take over (creation order would); it is used whenever it
+# clears the bake-in window. Otherwise the highest-version release that
+# clears the window wins — the previous line, not the most recent patch.
+latest_gh() {
+	_le_new=$(gh api "repos/$1/releases/latest" \
+		--jq '"\(.tag_name) \(.published_at | fromdateiso8601)"' 2>/dev/null) || true
+	if [ -n "$_le_new" ] && [ "${_le_new##* }" -le "$release_cutoff" ]; then
+		printf '%s\n' "${_le_new%% *}" | sed "$2"
+		return 0
+	fi
+	gh api "repos/$1/releases?per_page=30" \
+		--jq '.[] | select((.draft | not) and (.prerelease | not) and .published_at)
+			| "\(.tag_name) \(.published_at | fromdateiso8601)"' |
+	while read -r _le_tag _le_pub; do
+		[ "$_le_pub" -le "$release_cutoff" ] || continue
+		printf '%s\n' "$_le_tag"
+	done | sort -Vr | head -1 | sed "$2"
+}
+
+# to_epoch <date> — GNU date -d first, then BSD date -j for the two upstream
+# formats: HTTP Last-Modified and the Apache index's DD-Mon-YYYY.
+to_epoch() {
+	_te_d=$(printf '%s' "$1" | tr '-' ' ')
+	date -d "$_te_d" +%s 2>/dev/null && return 0
+	date -j -f "%a, %d %b %Y %H:%M:%S GMT" "$1" +%s 2>/dev/null ||
+		date -j -f "%d %b %Y %H:%M" "$_te_d" +%s 2>/dev/null
+}
+
+# tag_epoch <owner/repo> <tag> — when a git tag was cut: the tagger date for
+# annotated tags, the tagged commit's committer date for lightweight ones.
+tag_epoch() {
+	_te_obj=$(gh api "repos/$1/git/ref/tags/$2" --jq '.object.url' 2>/dev/null) || return 1
+	gh api "$_te_obj" --jq '(.tagger.date // .committer.date) | fromdateiso8601' 2>/dev/null
+}
+
+# latest_tag <owner/repo> <ref-glob> <tag-regex> <sed> — newest matching git
+# tag whose date clears the window. ls-remote carries no dates, so the 15
+# newest candidates are dated via the API, newest first.
+latest_tag() {
+	git ls-remote --tags "https://github.com/$1" "$2" |
+	sed 's|.*refs/tags/||' | grep -E "$3" | sort -uVr | head -15 |
+	while IFS= read -r _lt_tag; do
+		_lt_e=$(tag_epoch "$1" "$_lt_tag") || continue
+		[ -n "$_lt_e" ] && [ "$_lt_e" -le "$release_cutoff" ] || continue
+		printf '%s\n' "$_lt_tag" | sed "$4"
+		break
+	done
 }
 
 # tool_latest <repo> — upstream tag a ci-tools.txt row builds. "Latest" is
@@ -109,11 +176,11 @@ latest_gh() { # <owner/repo> <sed expr>
 tool_latest() {
 	case "$1" in
 	nodejs/node)
-		# dist/index.json is newest-first; first entry with an lts codename
-		# is the current LTS point release.
+		# dist/index.json is newest-first; the first entry with an lts
+		# codename inside the bake-in window is the current LTS point release.
 		ensure_cmds curl jq
 		curl -fsSL --retry 3 --max-time 20 https://nodejs.org/dist/index.json |
-			jq -r '[.[] | select(.lts != false)][0].version' ;;
+			jq -r '[.[] | select(.lts != false) | select(.date <= "'"$cutoff_ymd"'")][0].version' ;;
 	*) latest_gh "$1" 's/$//' ;;
 	esac
 }
@@ -193,10 +260,12 @@ latest_eligible_oci() { # <gh-repo> <sed> <registry-repo>
 		printf '%s\n' "$_le_tag"
 		return 0
 	}
-	gh release list --repo "$1" --limit 10 --json tagName,isPrerelease \
-		--jq '.[] | select(.isPrerelease | not) | .tagName' 2>/dev/null |
+	gh release list --repo "$1" --limit 10 --json tagName,isPrerelease,publishedAt \
+		--jq '.[] | select(.isPrerelease | not)
+			| "\(.tagName) \(.publishedAt | fromdateiso8601)"' 2>/dev/null |
 	sort -Vr |
-	while IFS= read -r _le_rel; do
+	while read -r _le_rel _le_pub; do
+		[ "$_le_pub" -le "$release_cutoff" ] || continue
 		_le_img=$(printf '%s' "$_le_rel" | sed "$2")
 		[ "$_le_img" = "$_le_tag" ] && continue
 		oci_probe "$3:$_le_img" || continue
@@ -258,12 +327,19 @@ if [ "$force_product" = postgres ] && [ -n "$force_version" ]; then
 	vec=${rest%%/*}
 	vchord=${rest##*/}
 else
+	# The source index dates every v18.x directory (Apache listing format).
 	pg=$(curl -fsSL https://ftp.postgresql.org/pub/source/ |
-		grep -oE 'v18\.[0-9]+/' | tr -d 'v/' | sort -uV | tail -1)
+		grep -oE 'v18\.[0-9]+/</a> +[0-9]{2}-[A-Za-z]{3}-[0-9]{4} [0-9]{2}:[0-9]{2}' |
+		while read -r _pg_ver _pg_d _pg_t; do
+			_pg_e=$(to_epoch "$_pg_d $_pg_t") || continue
+			[ -n "$_pg_e" ] && [ "$_pg_e" -le "$release_cutoff" ] || continue
+			_pg_ver=${_pg_ver%/</a>}
+			printf '%s\n' "${_pg_ver#v}"
+		done | sort -uV | tail -1)
 	ts=$(latest_gh timescale/timescaledb 's/^v//')
 	# pgvector publishes tags but no GitHub releases.
-	vec=$(git ls-remote --tags https://github.com/pgvector/pgvector 'refs/tags/v*' |
-		sed 's|.*refs/tags/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV | tail -1)
+	vec=$(latest_tag pgvector/pgvector 'refs/tags/v*' \
+		'^v[0-9]+\.[0-9]+\.[0-9]+$' 's/^v//')
 	vchord=$(latest_gh tensorchord/VectorChord 's/^v//')
 fi
 [ -n "$pg" ] && [ -n "$ts" ] && [ -n "$vec" ] && [ -n "$vchord" ] || {
@@ -286,8 +362,8 @@ if [ "$force_product" = valkey ] && [ -n "$force_version" ]; then
 	server=${force_version%%/*}
 	bloom=${force_version##*/}
 else
-	server=$(git ls-remote --tags https://github.com/valkey-io/valkey 'refs/tags/*' |
-		sed 's|.*refs/tags/||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV | tail -1)
+	server=$(latest_tag valkey-io/valkey 'refs/tags/*' \
+		'^[0-9]+\.[0-9]+\.[0-9]+$' 's/$//')
 	bloom=$(latest_gh valkey-io/valkey-bloom 's/^v//')
 fi
 [ -n "$server" ] && [ -n "$bloom" ] || {
@@ -303,9 +379,8 @@ decide valkey "${server}-bloom${bloom}"
 if [ "$force_product" = clickhouse ] && [ -n "$force_version" ]; then
 	ch_version=$(printf '%s' "$force_version" | sed 's/^v//; s/-lts$//')
 else
-	ch_version=$(git ls-remote --tags https://github.com/ClickHouse/ClickHouse 'refs/tags/*-lts' |
-		sed 's|.*refs/tags/v||; s|-lts$||' |
-		grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV | tail -1)
+	ch_version=$(latest_tag ClickHouse/ClickHouse 'refs/tags/*-lts' \
+		'^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-lts$' 's/^v//; s/-lts$//')
 fi
 decide clickhouse "$ch_version"
 
@@ -353,12 +428,30 @@ if [ "$force_product" = llama-embedding ] && [ -n "$force_version" ]; then
 else
 	llama_v=$(gh api "repos/ggml-org/llama.cpp/releases?per_page=30" --jq '
 		[.[] | select(.tag_name | startswith("b"))
+		 | select('"$jq_aged"')
 		 | select([.assets[].name | select(test("-bin-(ubuntu-x64|ubuntu-arm64|macos-arm64)\\.tar\\.gz$"))]
 			| unique | length == 3)
 		 | .tag_name][0]')
 fi
 case "$llama_v" in b*) ;; *) llama_v="b$llama_v" ;; esac
 decide llama-embedding "$llama_v"
+
+# -------------------------------------------------------------------- mysql
+# Repack of Oracle's "Linux - Generic" binaries for MySQL test lanes.
+# Tracks mysql-server's 9.x git tags; the CDN tarball can lag the tag, so the
+# newest tag clearing the bake-in window whose tarball is published wins.
+mysql_v=$(git ls-remote --tags https://github.com/mysql/mysql-server 'refs/tags/mysql-9.*' |
+	sed 's|.*refs/tags/mysql-||' | grep -E '^9\.[0-9]+\.[0-9]+$' | sort -uVr | head -15 |
+	while IFS= read -r _m_v; do
+		_m_e=$(tag_epoch mysql/mysql-server "mysql-$_m_v") || continue
+		[ -n "$_m_e" ] && [ "$_m_e" -le "$release_cutoff" ] || continue
+		curl -fsSI --retry 3 -o /dev/null --max-time 20 \
+			"https://dev.mysql.com/get/Downloads/MySQL-${_m_v%.*}/mysql-${_m_v}-linux-glibc2.28-aarch64.tar.xz" \
+			2>/dev/null || continue
+		printf '%s\n' "$_m_v"
+		break
+	done)
+decide mysql "$(force_or mysql "$mysql_v")"
 
 # -------------------------------------------------------------------- k3s
 # Node binaries + zstd airgap images, mirrored verbatim from k3s-io releases —
@@ -509,7 +602,7 @@ printf 'k3s_build=%s\nk3s_matrix={"include":[%s]}\n' "$k3s_build" "$k3s_matrix" 
 
 # One matrix cell per (version, image): the image set comes from each built
 # version's own k3s-images.txt — verified against its GitHub asset digest —
-# minus the components tea disables: traefik, metrics-server, klipper-lb.
+# minus the components the deployment disables: traefik, metrics-server, klipper-lb.
 # build-k3s-system runs one cell per image; release-k3s-system uses the
 # version-only matrix to merge a version's cells into one release.
 k3s_system_matrix=
@@ -562,7 +655,7 @@ printf 'k3s_system_images_matrix={"include":[%s]}\n' \
 
 # ------------------------------------------------------------------ flatcar
 # Public release artifacts under <channel>.release.flatcar-linux.net, mirrored
-# for pin durability — the CDN drops old versions while tea's pins keep
+# for pin durability — the CDN drops old versions while downstream pins keep
 # referencing them. "latest" = the channel's current release, read from its
 # version.txt; there is no releases API.
 flatcar_latest() {
@@ -576,7 +669,23 @@ printf '%s\n' "$flatcar_v" | grep -Eq '^[0-9]+(\.[0-9]+)+$' || {
 	echo "check.sh: invalid Flatcar version '$flatcar_v'" >&2
 	exit 1
 }
-decide flatcar "$flatcar_v"
+# The channel exposes only "current" — no history to fall back to — so a
+# version.txt touched inside the bake-in window defers the product (and the
+# sysext combo, which embeds the same version) to the next run.
+flatcar_fresh=
+if [ "$release_min_age" -gt 0 ]; then
+	_lm=$(curl -fsSIL --retry 3 \
+		"https://stable.release.flatcar-linux.net/amd64-usr/current/version.txt" |
+		sed -n 's/^[Ll]ast-[Mm]odified:[[:space:]]*//p' | tail -1 | tr -d '\r')
+	_lm_e=$(to_epoch "$_lm") || true
+	{ [ -n "$_lm_e" ] && [ "$_lm_e" -le "$release_cutoff" ]; } || flatcar_fresh=true
+fi
+if [ -n "$flatcar_fresh" ]; then
+	printf 'flatcar_version=%s\nflatcar_build=false\n' "$flatcar_v" >>"$out"
+	echo "flatcar: $flatcar_v inside the 12h bake-in window — deferring"
+else
+	decide flatcar "$flatcar_v"
+fi
 
 # ------------------------------------------------------ flatcar-zfs-sysext
 # OpenZFS built as a systemd-sysext inside the matching Flatcar developer
@@ -605,7 +714,13 @@ printf '%s\n' "$sysext_flatcar" "$sysext_zfs" |
 }
 printf 'flatcar_zfs_sysext_flatcar=%s\nflatcar_zfs_sysext_zfs=%s\n' \
 	"$sysext_flatcar" "$sysext_zfs" >>"$out"
-decide flatcar-zfs-sysext "${sysext_flatcar}-zfs${sysext_zfs}"
+if [ -n "$flatcar_fresh" ]; then
+	printf 'flatcar_zfs_sysext_version=%s\nflatcar_zfs_sysext_build=false\n' \
+		"${sysext_flatcar}-zfs${sysext_zfs}" >>"$out"
+	echo "flatcar-zfs-sysext: flatcar $sysext_flatcar inside the 12h bake-in window — deferring"
+else
+	decide flatcar-zfs-sysext "${sysext_flatcar}-zfs${sysext_zfs}"
+fi
 
 # --------------------------------------------------------------- oci mirrors
 # zstd:chunked repacks of upstream platform images. scripts/oci-images.txt
@@ -699,8 +814,8 @@ fi
 printf 'oci_build=%s\noci_matrix={"include":[%s]}\n' "$oci_build" "$oci_matrix" >>"$out"
 
 # ----------------------------------------------------------------- ci tools
-# Verified mirrors of small public binaries that tea pins by
-# sha256 in downloads.sha256 / @moffy/versions. ci-tools.txt lists
+# Verified mirrors of small public binaries that consumers pin by
+# sha256. ci-tools.txt lists
 # "<name> <gh-repo> <x64-url> <arm64-url> <mode>"; latest is the repo's GitHub
 # latest release (tool_latest() — nodejs/node resolves to the newest LTS line).
 # Output is a build matrix, one cell per missing tool.

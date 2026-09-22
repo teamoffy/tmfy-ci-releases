@@ -1,11 +1,14 @@
 # CI Releases
 
 Prebuilt dependencies for CI pipelines, published as GitHub release assets.
-[`release.yml`](.github/workflows/release.yml) runs daily (06:17 UTC), checks each
-product's upstream for a new version, and builds, smoke-tests, and publishes
-anything not yet released here. Product jobs run in parallel, and a failed
-target does not cancel the other targets in its matrix. The newest 45 releases
-per product are kept.
+[`release.yml`](.github/workflows/release.yml) runs every 2nd day (06:17 UTC),
+checks each product's upstream for a new version, and builds, smoke-tests, and
+publishes anything not yet released here. Scheduled runs only pick up releases
+at least
+12 hours old — a pulled or compromised upstream release usually disappears
+inside that window — while `workflow_dispatch` runs bypass it. Product jobs
+run in parallel, and a failed target does not cancel the other targets in its
+matrix. The newest 45 releases per product are kept.
 
 ## Products
 
@@ -16,6 +19,7 @@ per product are kept.
 | graalvm | [Oracle GraalVM for JDK](https://www.oracle.com/downloads/graalvm-downloads.html) GDS pins ([`graalvm.txt`](scripts/graalvm.txt)) | linux-x64, linux-arm64, darwin-arm64 | `home/` (the JDK home) |
 | zlib-ng | [zlib-ng/zlib-ng](https://github.com/zlib-ng/zlib-ng) | linux-x64, linux-arm64, darwin-arm64 | `/opt/zlib-ng` |
 | postgres | PostgreSQL 18.x + timescaledb + pgvector + VectorChord | linux-x64, linux-arm64 | `/opt/postgresql` |
+| mysql | [MySQL](https://github.com/mysql/mysql-server) 9.x "Linux - Generic" repack | linux-arm64 | `/opt/mysql` |
 | valkey | [valkey](https://github.com/valkey-io/valkey) + valkey-bloom | linux-x64, linux-arm64 | `/opt/valkey` |
 | clickhouse | [ClickHouse](https://github.com/ClickHouse/ClickHouse) LTS tags | linux-x64, linux-arm64 | `/opt/clickhouse` |
 | pebble | [letsencrypt/pebble](https://github.com/letsencrypt/pebble) | linux-x64, linux-arm64 | `/opt/pebble` |
@@ -104,7 +108,7 @@ Each k3s version also has a `k3s-system/v<k3s-version>` release. It mirrors
 pause, coredns, local-path-provisioner, klipper-helm, and busybox as individual
 `oci-<image>-<tag>-oci.tar.zst` assets. The verified `k3s-images.txt` from that
 k3s release supplies the list; traefik, metrics-server, and klipper-lb are
-skipped because tea disables them.
+skipped because the deployment disables them.
 
 ## Per-cloud stacks
 
@@ -168,6 +172,11 @@ Product notes:
   pkg-config or `-I`/`-L`. aws-lc macOS dylibs use `/opt/aws-lc/lib` install names.
 - **postgres**: server + timescaledb + pgvector + vchord + pgcrypto. Cluster
   creation and `shared_preload_libraries=timescaledb,vchord` are consumer-side.
+- **mysql**: repack of Oracle's "Linux - Generic" binaries for CI test lanes —
+  `opt/mysql/bin/{mysqld,mysql,mysqladmin}`, `lib/`, `share/`; the runtime deps
+  the ubuntu images lack (libaio, libnuma, ncurses) are bundled into
+  `lib/private/`, which the binaries' `$ORIGIN/../lib/private` RUNPATH covers.
+  Datadir init (`--initialize-insecure`), users, and flags are consumer-side.
 - **valkey**: bloom module at `/opt/valkey/modules/libvalkey_bloom.so`.
 - **clickhouse**: binaries in `usr/bin`, config in `etc/clickhouse-server`.
 - **pebble**: binaries in `bin/`, test config/certs in `test/`.
@@ -195,7 +204,7 @@ Product notes:
   (`vec_version()`); consumers load it by absolute path, e.g.
   `sqlite3_load_extension` or a `*_SQLITE_VEC_EXTENSION`-style env var.
 - **llama-embedding**: llama.cpp's official per-platform binary tarball plus
-  the pinned EmbeddingGemma GGUF — the codetel semantic-search test fixture.
+  the pinned EmbeddingGemma GGUF — a semantic-search test fixture.
   `opt/llama-embedding/native/` holds the libraries and CLI tools;
   `opt/llama-embedding/models/` holds `embeddinggemma-300M-Q8_0.gguf`. The
   version is llama.cpp's `bNNNN` tag verbatim (`llama-embedding/vb11056`) —

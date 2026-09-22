@@ -1,7 +1,7 @@
 #!/bin/sh
 # Mirror one upstream image as a zstd:chunked OCI image layout, packed into a
 # tar.zst release asset. Only linux platforms are kept — windows variants carry
-# multi-GB base layers no tea node can pull (gcp-pd-csi-driver: 4.4 GB total,
+# multi-GB base layers the nodes cannot use (gcp-pd-csi-driver: 4.4 GB total,
 # 0.26 GB of it linux) and blow GitHub's 2 GiB asset cap. Every layer is
 # re-encoded to zstd:chunked, which lets containers/storage clients use range
 # requests and reuse chunks during partial pulls. Writes release-info.env
