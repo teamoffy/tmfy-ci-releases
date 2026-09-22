@@ -67,9 +67,10 @@ target, so bump them deliberately via a forced version.
 
 - `check.sh` — version resolution for all products. Reads `FORCE_PRODUCT` /
   `FORCE_VERSION` and writes versions and build decisions to `GITHUB_OUTPUT`.
-  Products that can build several releases in one run (`oci-*`, `k3s`,
-  `k3s-system`, and ci-tools) use JSON matrices; `k3s-system` additionally
-  emits a `(version, image)` cell matrix for its per-image build fan-out.
+  Products that fan out into build matrices (`oci-*`, `k3s`, `k3s-system`,
+  ci-tools, and `pulumi-plugins.txt`) use JSON matrices; `k3s-system`
+  additionally emits a `(version, image)` cell matrix for its per-image
+  build fan-out.
 - `oci-images.txt` — tracked image mirrors: `<name> <registry/repo>
   <gh repo|pin:tag> <sed>`, one per line. `<gh repo>`'s newest release tag,
   transformed by `<sed>`, is the image tag to mirror — except a release that

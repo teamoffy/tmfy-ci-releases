@@ -1517,8 +1517,12 @@ jobs:
           tardir) layout="extract at \`/\` — the install lands in \`/opt/$NAME\`" ;;
           *) layout="extract at \`/\` — the binary lands in \`/usr/local/bin\`" ;;
           esac
+          # A manifest row may skip an arch with "-", so the notes list the
+          # platforms actually built rather than assuming both.
+          platforms=$(printf '%s\n' assets/*.tar.zst |
+            sed -E 's/.*-(linux-x64|linux-arm64)\.tar\.zst$/\1/' | paste -sd, -)
           sh scripts/publish-release.sh "$NAME/v$VERSION" "$NAME $VERSION" assets <<EOF
-          $NAME $TAG upstream downloads, verified and repacked as max-zstd (level 22) tar.zst for linux-x64 and linux-arm64.
+          $NAME $TAG upstream downloads, verified and repacked as max-zstd (level 22) tar.zst for $platforms.
 
           - Upstream: https://github.com/$REPO/releases/tag/$TAG
           - Verified: each downloaded file against its upstream checksum — the GitHub asset digest for github.com downloads, or the published .sha256/.sha256sum sidecar or per-directory SHASUMS256.txt/sha256sums.txt otherwise.
@@ -1528,8 +1532,9 @@ jobs:
           EOF
 
   # --------------------------------------------------------- pulumi plugins
-  # Pinned Pulumi resource provider binaries: one build cell per (provider,
-  # platform), one release per provider. check.sh emits both matrices.
+  # Pulumi resource provider binaries, each tracked at its repo's latest
+  # release: one build cell per (provider, platform), one release per
+  # provider. check.sh emits both matrices.
   build-pulumi-plugins:
     needs: check
     if: needs.check.outputs.pulumi_plugins_build == 'true'
