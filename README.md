@@ -27,7 +27,7 @@ matrix. The newest 45 releases per product are kept.
 | zstd | [facebook/zstd](https://github.com/facebook/zstd) | linux-x64, linux-arm64, darwin-arm64 | `/opt/zstd` |
 | libgit2 | [libgit2](https://github.com/libgit2/libgit2) + [libssh2](https://github.com/libssh2/libssh2) | linux-x64, linux-arm64 | `/opt/libgit2` |
 | sqlite-vec | [asg017/sqlite-vec](https://github.com/asg017/sqlite-vec) | linux-x64, linux-arm64, darwin-arm64 | `/opt/sqlite-vec` |
-| llama-embedding | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `bNNNN` builds + [embeddinggemma-300M-GGUF](https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF) | linux-x64, linux-arm64, darwin-arm64 | `/opt/llama-embedding` |
+| llama-embedding | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `vX.Y.Z` releases + [embeddinggemma-300M-GGUF](https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF) | linux-x64, linux-arm64, darwin-arm64 | `/opt/llama-embedding` |
 | k3s | [k3s-io/k3s](https://github.com/k3s-io/k3s) | verbatim upstream files, not tar.zst | — |
 | k3s-system | k3s release's `k3s-images.txt` | per-image OCI `.tar.zst` assets | — |
 | flatcar | [Flatcar stable channel](https://www.flatcar.org/releases/) | verbatim upstream files, amd64 + arm64 | — |
@@ -246,9 +246,9 @@ Product notes:
   the pinned EmbeddingGemma GGUF — a semantic-search test fixture.
   `opt/llama-embedding/native/` holds the libraries and CLI tools;
   `opt/llama-embedding/models/` holds `embeddinggemma-300M-Q8_0.gguf`. The
-  version is llama.cpp's `bNNNN` tag verbatim (`llama-embedding/vb11056`) —
-  upstream marks those builds prerelease, so the newest `b*` tag carrying all
-  three bin tarballs is tracked rather than `releases/latest`. The
+  version is llama.cpp's release version (`llama-embedding/v0.5.0`) — upstream
+  ships binaries only on the daily `bNNNN` prerelease tags, and each release's
+  `nightly-tag.txt` names the blessed build the repack mirrors. The
   model is revision-pinned in the repack script and bumps via a forced rebuild.
   The archive includes the Gemma terms, prohibited-use policy, required notice,
   and modification notice. Smoke-tested by running `llama-cli --version`.

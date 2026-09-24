@@ -4,14 +4,26 @@
 # (extract at / to install into /opt/llama-embedding). One asset per platform
 # carries both, matching the llama-embedding test fixture's layout:
 # native/ holds the llama.cpp libraries and tools, models/ the GGUF.
-# usage: llama-embedding-repack.sh <version>   # <version> is the bNNNN tag
+# usage: llama-embedding-repack.sh <version> <upstream-tag>
+#   <version>       release version X.Y.Z — the product tag is llama-embedding/vX.Y.Z
+#   <upstream-tag>  the bNNNN build that release's nightly-tag.txt points at;
+#                   upstream ships binaries only on the b* prerelease tags
 # env:
 #   GH_TOKEN                   GitHub token (or use an authenticated gh CLI)
 #   LLAMA_EMBEDDING_WORK       work dir (default .llama-embedding-work)
 #   LLAMA_EMBEDDING_PLATFORMS  space-separated subset to build
 #                            (default: linux-x64 linux-arm64 darwin-arm64)
 set -eu
-version="${1:?usage: llama-embedding-repack.sh <bNNNN-version>}"
+version="${1:?usage: llama-embedding-repack.sh <version> <upstream-tag>}"
+upstream="${2:?usage: llama-embedding-repack.sh <version> <upstream-tag>}"
+version="${version#v}"
+case "$upstream" in
+b[0-9]*) ;;
+*)
+	echo "llama-embedding-repack.sh: upstream tag '$upstream' is not a bNNNN build" >&2
+	exit 1
+	;;
+esac
 work="${LLAMA_EMBEDDING_WORK:-$PWD/.llama-embedding-work}"
 out="$work/out"
 platforms="${LLAMA_EMBEDDING_PLATFORMS:-linux-x64 linux-arm64 darwin-arm64}"
@@ -39,12 +51,12 @@ mkdir -p "$out" "$work/dl"
 
 ensure_cmds gh jq zstd # preinstalled on the runner images
 
-base="https://github.com/ggml-org/llama.cpp/releases/download/${version}"
+base="https://github.com/ggml-org/llama.cpp/releases/download/${upstream}"
 
 # Verify llama.cpp's GitHub-generated asset digests. The GGUF and terms files
 # use pinned sha256 values.
 release_json="$work/llama-release.json"
-gh api "repos/ggml-org/llama.cpp/releases/tags/$version" >"$release_json"
+gh api "repos/ggml-org/llama.cpp/releases/tags/$upstream" >"$release_json"
 gguf="$work/dl/$gguf_file"
 fetch "$gguf_url" "$gguf" "$gguf_sha256"
 terms="$work/dl/GEMMA_TERMS_OF_USE.txt"
@@ -63,7 +75,7 @@ for platform in $platforms; do
 		exit 1
 		;;
 	esac
-	name="llama-${version}-bin-${classifier}.tar.gz"
+	name="llama-${upstream}-bin-${classifier}.tar.gz"
 	tgz="$work/dl/$name"
 	fetch "$base/$name" "$tgz"
 	upstream_sha=$(sha256_of "$tgz")
@@ -100,6 +112,7 @@ EOF
 	{
 		echo "product=llama-embedding"
 		echo "version=$version"
+		echo "upstream-tag=$upstream"
 		echo "platform=$platform"
 		echo "upstream-url=$base/$name"
 		echo "upstream-sha256=$upstream_sha"
@@ -142,9 +155,9 @@ EOF
 			"$cli" --version 2>&1)
 		echo "smoke: $ver_out"
 		case "$ver_out" in
-		*"build ${version#b}"*) ;;
+		*"build ${upstream#b}"*) ;;
 		*)
-			echo "llama-embedding-repack.sh: llama-cli build mismatch: got '$ver_out', want build ${version#b}" >&2
+			echo "llama-embedding-repack.sh: llama-cli build mismatch: got '$ver_out', want build ${upstream#b}" >&2
 			exit 1
 			;;
 		esac

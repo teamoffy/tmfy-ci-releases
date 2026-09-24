@@ -9,7 +9,7 @@
 #                   postgres: pg/ts/vec/vchord  e.g. 18.6/2.29.2/0.8.6/1.1.1
 #                   valkey:   server/bloom     e.g. 9.1.2/1.0.1
 #                   libgit2:  libgit2/libssh2  e.g. 1.9.7/1.11.1
-#                   llama-embedding: bNNNN     e.g. b10819
+#                   llama-embedding: vX.Y.Z     e.g. v0.5.0
 #                   graalvm:  a JDK version on GDS  e.g. 25.0.4.1.1
 #                   flatcar-zfs-sysext: flatcar/zfs  e.g. 4593.2.5/2.4.4
 #                   oci-mirror: <name>:<tag>   e.g. cilium:v1.20.1
@@ -585,21 +585,33 @@ decide libgit2 "${lg}-libssh2-${ssh2}"
 decide sqlite-vec "$(force_or sqlite-vec "$(latest_gh asg017/sqlite-vec 's/^v//')")"
 
 # ------------------------------------------------------------- llama-embedding
-# The version is a bNNNN tag, verbatim (tag llama-embedding/vbNNNN). Upstream
-# marks every b-build a prerelease, so releases/latest resolves to a semver
-# tag that ships no bin assets — take the newest b* release carrying all three
-# bin tarballs instead.
+# The version is an upstream vX.Y.Z release minus the v (tag
+# llama-embedding/vX.Y.Z). Versioned releases ship no bin assets — only
+# nightly-tag.txt pointing at the blessed bNNNN build that does — so resolve
+# it here and pass it to the repack as llama_embedding_upstream. Version tags
+# come from git refs, not the releases API: llama.cpp cuts a bNNNN prerelease
+# nearly every day, so the releases feed's aged fallback could never reach the
+# previous stable version while the newest one sits inside the bake-in window.
 if [ "$force_product" = llama-embedding ] && [ -n "$force_version" ]; then
 	llama_v=$force_version
 else
-	llama_v=$(gh api "repos/ggml-org/llama.cpp/releases?per_page=30" --jq '
-		[.[] | select(.tag_name | startswith("b"))
-		 | select('"$jq_aged"')
-		 | select([.assets[].name | select(test("-bin-(ubuntu-x64|ubuntu-arm64|macos-arm64)\\.tar\\.gz$"))]
-			| unique | length == 3)
-		 | .tag_name][0]')
+	llama_v=$(latest_tag ggml-org/llama.cpp 'refs/tags/v*' \
+		'^v[0-9]+\.[0-9]+\.[0-9]+$' 's/^v//')
 fi
-case "$llama_v" in b*) ;; *) llama_v="b$llama_v" ;; esac
+llama_v="${llama_v#v}"
+case "$llama_v" in
+*[!0-9.]* | "" | .* | *. | *..* | *.*.*.*)
+	echo "check.sh: '$llama_v' is not a llama.cpp release version (expected X.Y.Z)" >&2
+	exit 1 ;;
+esac
+llama_upstream=$(curl -fsSL --retry 3 \
+	"https://github.com/ggml-org/llama.cpp/releases/download/v${llama_v}/nightly-tag.txt" |
+	tr -d '[:space:]')
+printf '%s\n' "$llama_upstream" | grep -qE '^b[0-9]+$' || {
+	echo "check.sh: llama.cpp v$llama_v resolved to unexpected build tag '$llama_upstream'" >&2
+	exit 1
+}
+printf 'llama_embedding_upstream=%s\n' "$llama_upstream" >>"$out"
 decide llama-embedding "$llama_v"
 
 # -------------------------------------------------------------------- mysql
