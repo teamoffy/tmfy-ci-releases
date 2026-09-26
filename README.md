@@ -27,6 +27,7 @@ matrix. The newest 45 releases per product are kept.
 | zstd | [facebook/zstd](https://github.com/facebook/zstd) | linux-x64, linux-arm64, darwin-arm64 | `/opt/zstd` |
 | libgit2 | [libgit2](https://github.com/libgit2/libgit2) + [libssh2](https://github.com/libssh2/libssh2) | linux-x64, linux-arm64 | `/opt/libgit2` |
 | sqlite-vec | [asg017/sqlite-vec](https://github.com/asg017/sqlite-vec) | linux-x64, linux-arm64, darwin-arm64 | `/opt/sqlite-vec` |
+| playwright-browsers | [microsoft/playwright](https://github.com/microsoft/playwright) browser builds (Chromium headless shell, WebKit, FFmpeg) | linux-x64, linux-arm64 (ubuntu-26.04 WebKit), darwin-arm64 | `ms-playwright/` cache tree |
 | llama-embedding | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `vX.Y.Z` releases + [embeddinggemma-300M-GGUF](https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF) | linux-x64, linux-arm64, darwin-arm64 | `/opt/llama-embedding` |
 | k3s | [k3s-io/k3s](https://github.com/k3s-io/k3s) | verbatim upstream files, not tar.zst | — |
 | k3s-system | k3s release's `k3s-images.txt` | per-image OCI `.tar.zst` assets | — |
@@ -242,6 +243,15 @@ Product notes:
   upstream `checksums.txt` and smoke-tested by loading the extension
   (`vec_version()`); consumers load it by absolute path, e.g.
   `sqlite3_load_extension` or a `*_SQLITE_VEC_EXTENSION`-style env var.
+- **playwright-browsers**: the browser trees playwright's own installer
+  produces (`install --only-shell chromium webkit`), packed as
+  `ms-playwright/` including the `INSTALLATION_COMPLETE` markers. Extract into
+  the cache parent (`~/.cache` on Linux, `~/Library/Caches` on macOS) and
+  `playwright install` has nothing to download; consumers still need
+  `playwright install-deps`/`--with-deps` for system libraries on Linux. The
+  linux legs build on ubuntu-26.04 runners, so the packed WebKit is the
+  ubuntu-26.04 build. Smoke-tested by running the packed headless shell
+  (`--version`).
 - **llama-embedding**: llama.cpp's official per-platform binary tarball plus
   the pinned EmbeddingGemma GGUF — a semantic-search test fixture.
   `opt/llama-embedding/native/` holds the libraries and CLI tools;
