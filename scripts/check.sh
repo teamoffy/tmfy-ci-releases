@@ -49,7 +49,7 @@ force_pulumi_plugin=
 force_all_pulumi_plugins=false
 force_stacks=false
 case "$force_product" in
-"" | aws-lc | bun | graalvm | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext) ;;
+"" | aws-lc | bun | graalvm | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext | playwright-browsers) ;;
 oci-mirror)
 	if [ -n "$force_version" ]; then
 		case "$force_version" in
@@ -583,6 +583,12 @@ decide libgit2 "${lg}-libssh2-${ssh2}"
 # ---------------------------------------------------------------- sqlite-vec
 # Upstream publishes loadable-extension tarballs; the repack only mirrors them.
 decide sqlite-vec "$(force_or sqlite-vec "$(latest_gh asg017/sqlite-vec 's/^v//')")"
+
+# -------------------------------------------------------- playwright-browsers
+# Repack of the browser builds playwright's own installer downloads. Tracks
+# microsoft/playwright release tags, which match the npm versions.
+decide playwright-browsers \
+	"$(force_or playwright-browsers "$(latest_gh microsoft/playwright 's/^v//')")"
 
 # ------------------------------------------------------------- llama-embedding
 # The version is an upstream vX.Y.Z release minus the v (tag

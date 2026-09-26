@@ -3,7 +3,7 @@
 ## Pipeline
 
 One workflow ([`release.yml`](.github/workflows/release.yml)), one run every
-2nd day (06:17 UTC), 45 jobs:
+2nd day (06:17 UTC), 47 jobs:
 
 1. **check** — resolves every product's target version from upstream (GitHub
    releases where they exist, git tags or index listings where they don't, the
@@ -152,13 +152,21 @@ target, so bump them deliberately via a forced version.
   the GDS artifacts API (the newest JDK version published for all platforms;
   a `version` input must exist on GDS for all platforms). Takes
   `GRAALVM_WORK`.
+- `playwright-browsers-repack.sh <playwright-version>` — run playwright's own
+  installer (`install --only-shell chromium webkit`) on the native runner so
+  the archive carries the canonical `ms-playwright/` layout and
+  `INSTALLATION_COMPLETE` markers; smoke-tests the headless shell. Upstream
+  publishes no browser checksums, so the installer's validation is the
+  upstream check. Linux legs must build on ubuntu-26.04 runners (the packed
+  WebKit is distro-versioned). Takes `PW_BROWSERS_WORK`, `PW_BROWSERS_PLATFORM`.
 - `<product>-build.sh <version>...` — build, smoke-test, and pack one product.
   The mirrors use `*-repack.sh` instead (`bun-repack.sh`, `graalvm-repack.sh`,
-  `mysql-repack.sh`, `sqlite-vec-repack.sh`, `llama-embedding-repack.sh`):
+  `mysql-repack.sh`, `sqlite-vec-repack.sh`, `llama-embedding-repack.sh`,
+  `playwright-browsers-repack.sh`):
   they verify upstream checksums where published and re-archive rather than
-  compile. sqlite-vec and llama-embedding repack on each target's native
-  runner so their smoke tests (loading `vec0`, running `llama-cli`) exercise
-  the packaged binaries.
+  compile. sqlite-vec, llama-embedding, and playwright-browsers repack on each
+  target's native runner so their smoke tests (loading `vec0`, running
+  `llama-cli`, running the headless shell) exercise the packaged binaries.
   Multi-component products take one arg per component (postgres 4, valkey 2,
   libgit2 2). Each takes a `*_PLATFORM` env (e.g. `linux-x64`) and a `*_WORK`
   work dir.
@@ -189,7 +197,10 @@ What runs where:
   macOS with their smoke tests included. Bun repacks and verifies upstream's
   Linux and macOS zips on the Linux runner; sqlite-vec and llama-embedding
   repack upstream's binaries on each platform's native runner so their smoke
-  tests load `vec0` and run `llama-cli`. GraalVM repacks the resolved GDS
+  tests load `vec0` and run `llama-cli`. playwright-browsers runs playwright's
+  installer on each platform's native runner (a Linux leg must be ubuntu-26.04
+  — the WebKit build is distro-versioned) and smoke-tests the packed headless
+  shell. GraalVM repacks the resolved GDS
   bundles on the Linux runner for all three platforms — the repack is
   platform-independent, and its post-pack check re-extracts `home/bin/java`
   rather than executing the JDK. The `pulumi-plugin-*` repack is

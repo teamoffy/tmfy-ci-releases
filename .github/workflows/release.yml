@@ -14,6 +14,7 @@ on:
           Product to force-rebuild (always builds and replaces its release assets). One of:
           aws-lc, bun, graalvm, zlib-ng, postgres, mysql, valkey, clickhouse,
           pebble, typesense, zstd, libgit2, sqlite-vec, llama-embedding,
+          playwright-browsers,
           oci-mirror (or oci-<name>), k3s, k3s-system, flatcar,
           flatcar-zfs-sysext, ci-tools (or a tool name from ci-tools.txt),
           pulumi-plugins (or pulumi-plugin-<name>), stacks. Empty = check every
@@ -92,6 +93,8 @@ jobs:
       libgit2_build: ${{ steps.resolve.outputs.libgit2_build }}
       sqlite_vec_version: ${{ steps.resolve.outputs.sqlite_vec_version }}
       sqlite_vec_build: ${{ steps.resolve.outputs.sqlite_vec_build }}
+      playwright_browsers_version: ${{ steps.resolve.outputs.playwright_browsers_version }}
+      playwright_browsers_build: ${{ steps.resolve.outputs.playwright_browsers_build }}
       llama_embedding_version: ${{ steps.resolve.outputs.llama_embedding_version }}
       llama_embedding_upstream: ${{ steps.resolve.outputs.llama_embedding_upstream }}
       llama_embedding_build: ${{ steps.resolve.outputs.llama_embedding_build }}
@@ -930,6 +933,79 @@ jobs:
           - Licenses: GPL-2.0 with a linking exception (libgit2), BSD-3-Clause (bundled libssh2)
           EOF
 
+  # ----------------------------------------------------- playwright-browsers
+  # Browser cache tree produced by playwright's own installer on each native
+  # runner — the linux legs must stay on ubuntu-26.04 runners so the packed
+  # WebKit matches the distro version consumers run on.
+  build-playwright-browsers:
+    needs: check
+    if: needs.check.outputs.playwright_browsers_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+          - platform: darwin-arm64
+            runs-on: macos-26
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Repack Playwright browsers
+        env:
+          PW_BROWSERS_WORK: ${{ runner.temp }}/pw-browsers-work
+          PW_BROWSERS_PLATFORM: ${{ matrix.platform }}
+        run: sh scripts/playwright-browsers-repack.sh "${{ needs.check.outputs.playwright_browsers_version }}"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-browsers-${{ matrix.platform }}
+          path: ${{ runner.temp }}/pw-browsers-work/out/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  release-playwright-browsers:
+    needs: [check, build-playwright-browsers]
+    if: needs.check.outputs.playwright_browsers_build == 'true' && needs.build-playwright-browsers.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.check.outputs.playwright_browsers_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: playwright-browsers-*
+          merge-multiple: true
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          sh scripts/publish-release.sh "playwright-browsers/v${VERSION}" "playwright-browsers v${VERSION}" assets <<EOF
+          Playwright ${VERSION} browser builds (Chromium headless shell, WebKit, FFmpeg) repacked as a max-zstd (level 22) tar.zst.
+
+          - Upstream: https://github.com/microsoft/playwright/releases/tag/v${VERSION}; browser zips pulled by \`playwright install --only-shell chromium webkit\` from cdn.playwright.dev. Upstream publishes no checksums for browser builds; the installer-validated archive is what SHA256SUMS.txt here pins.
+          - Smoke-tested: the packed headless shell runs \`--version\` on each native builder.
+          - Layout: the archive root is \`ms-playwright/\` — extract into the Playwright cache parent (\`~/.cache\` on Linux, \`~/Library/Caches\` on macOS) so \`ms-playwright/<browser>-<rev>/INSTALLATION_COMPLETE\` lands where the runtime expects it. Extraction needs zstd: \`tar --zstd -xf <asset>\`
+          - Linux assets are built on ubuntu-26.04 runners: the upstream WebKit package is distro-named (\`webkit-ubuntu-26.04.zip\` on x64, \`webkit-ubuntu-26.04-arm64.zip\` on arm64), so linux consumers must run ubuntu 26.04. Chromium headless shell and FFmpeg are distro-independent.
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - Licenses: see the bundled browser licenses (Chromium BSD-family; WebKit LGPL-2.1/BSD-2-Clause; FFmpeg LGPL-2.1)
+          EOF
+
   # ------------------------------------------------------------- sqlite-vec
   # Upstream ships the loadable vec0 extension; the repack only verifies and
   # re-archives it. Each platform uses a native runner so the smoke test loads
@@ -1748,6 +1824,7 @@ jobs:
         release-zstd,
         release-libgit2,
         release-sqlite-vec,
+        release-playwright-browsers,
         release-llama-embedding,
         release-mysql,
         release-k3s,
