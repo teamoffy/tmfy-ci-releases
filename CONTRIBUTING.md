@@ -10,9 +10,9 @@ One workflow ([`release.yml`](.github/workflows/release.yml)), one run every
    Flatcar channel's `version.txt`, and the GDS artifacts API for GraalVM) and
    decides whether that version is already released here. For the `oci-*`
    image mirrors it also probes each
-   resolved tag on its registry, and for `oci-*`, `k3s`, `k3s-system`, the
-   `ci-tools.txt` tools, `pulumi-plugins.txt`, and the stacks it emits a
-   dynamic build matrix of what's missing.
+   resolved tag on its registry, and for `oci-*`, `k3s`, `k3s-system`,
+   `chrome-for-testing`, the `ci-tools.txt` tools, `pulumi-plugins.txt`, and
+   the stacks it emits a dynamic build matrix of what's missing.
    It also resolves [`stacks.txt`](scripts/stacks.txt): each cloud declares a
    target Kubernetes minor and the check computes the deployed set (newest
    k3s patch of that minor plus every `oci-images.txt` component through its
@@ -51,6 +51,10 @@ single image directly with `product=oci-<name>` + `version=<tag>`; an empty
 version rebuilds every image at its newest servable tag. `ci-tools` works the same
 way over [`ci-tools.txt`](scripts/ci-tools.txt) — `product=ci-tools` +
 `version=<name>:<tag>` or `product=<tool name>` + `version=<tag>`.
+`chrome-for-testing` is pin-driven rather than latest-driven:
+`product=chrome-for-testing` with an empty `version` rebuilds every CfT
+version in [`chrome-for-testing.txt`](scripts/chrome-for-testing.txt), and
+`version=<cft-version>` adds or rebuilds one.
 `pulumi-plugins` rebuilds every provider in
 [`pulumi-plugins.txt`](scripts/pulumi-plugins.txt) at its latest release;
 `product=pulumi-plugin-<name>` rebuilds one, and a `version` input picks that
@@ -73,9 +77,9 @@ target, so bump them deliberately via a forced version.
 - `check.sh` — version resolution for all products. Reads `FORCE_PRODUCT` /
   `FORCE_VERSION` and writes versions and build decisions to `GITHUB_OUTPUT`.
   Products that fan out into build matrices (`oci-*`, `k3s`, `k3s-system`,
-  ci-tools, and `pulumi-plugins.txt`) use JSON matrices; `k3s-system`
-  additionally emits a `(version, image)` cell matrix for its per-image
-  build fan-out.
+  `chrome-for-testing`, ci-tools, and `pulumi-plugins.txt`) use JSON matrices;
+  `k3s-system` additionally emits a `(version, image)` cell matrix for its
+  per-image build fan-out.
 - `oci-images.txt` — tracked image mirrors: `<name> <registry/repo>
   <source> <sed> <k8s> <scope>`, one per line. `<source>` is a GitHub repo
   (newest release tag, transformed by `<sed>`, is the image tag), a literal
@@ -152,6 +156,15 @@ target, so bump them deliberately via a forced version.
   the GDS artifacts API (the newest JDK version published for all platforms;
   a `version` input must exist on GDS for all platforms). Takes
   `GRAALVM_WORK`.
+- `chrome-for-testing.txt` — pinned CfT versions to mirror (milk-browser's
+  managed-browser `ManagedChromeForTesting.VERSION`), one per line. Update it
+  when tea's pin moves; delete lines whose pins were dropped.
+- `chrome-for-testing-repack.sh <cft-version>` — fetch the CfT `chrome` zip for
+  `CFT_PLATFORM`, restage under `chrome-for-testing/<version>/<upstream-platform>/`,
+  smoke-test `chrome --version`, pack a tar.zst. Exits 3 when upstream never
+  shipped that platform at that version, so the matrix leg is skipped. Upstream
+  publishes no checksums; `release-info.env` records measured archive +
+  executable sha256s for the release notes. Takes `CFT_WORK`, `CFT_PLATFORM`.
 - `playwright-browsers-repack.sh <playwright-version>` — run playwright's own
   installer (`install --only-shell chromium webkit`) on the native runner so
   the archive carries the canonical `ms-playwright/` layout and
@@ -200,7 +213,10 @@ What runs where:
   tests load `vec0` and run `llama-cli`. playwright-browsers runs playwright's
   installer on each platform's native runner (a Linux leg must be ubuntu-26.04
   — the WebKit build is distro-versioned) and smoke-tests the packed headless
-  shell. GraalVM repacks the resolved GDS
+  shell. chrome-for-testing repacks upstream's CfT `chrome` zip on each
+  platform's native runner and runs the packed binary (`--version`); its
+  versions come from `chrome-for-testing.txt` pins, not upstream latest.
+  GraalVM repacks the resolved GDS
   bundles on the Linux runner for all three platforms — the repack is
   platform-independent, and its post-pack check re-extracts `home/bin/java`
   rather than executing the JDK. The `pulumi-plugin-*` repack is

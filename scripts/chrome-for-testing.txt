@@ -1,0 +1,5 @@
+# Chrome-for-Testing versions to mirror, one per line. This is the managed
+# browser pin in tea's milk-browser (ManagedChromeForTesting.VERSION) — update
+# this list when that pin changes. A leg whose platform upstream never shipped
+# (linux-arm64 only exists from ~v154) is skipped, not failed.
+154.0.8037.0

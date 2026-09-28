@@ -28,6 +28,7 @@ matrix. The newest 45 releases per product are kept.
 | libgit2 | [libgit2](https://github.com/libgit2/libgit2) + [libssh2](https://github.com/libssh2/libssh2) | linux-x64, linux-arm64 | `/opt/libgit2` |
 | sqlite-vec | [asg017/sqlite-vec](https://github.com/asg017/sqlite-vec) | linux-x64, linux-arm64, darwin-arm64 | `/opt/sqlite-vec` |
 | playwright-browsers | [microsoft/playwright](https://github.com/microsoft/playwright) browser builds (Chromium headless shell, WebKit, FFmpeg) | linux-x64, linux-arm64 (ubuntu-26.04 WebKit), darwin-arm64 | `ms-playwright/` cache tree |
+| chrome-for-testing | [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) `chrome` builds, pinned by milk-browser | linux-x64, linux-arm64, darwin-arm64 | `chrome-for-testing/<ver>/<upstream-platform>/` under `~/.milk/browser` |
 | llama-embedding | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `vX.Y.Z` releases + [embeddinggemma-300M-GGUF](https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF) | linux-x64, linux-arm64, darwin-arm64 | `/opt/llama-embedding` |
 | k3s | [k3s-io/k3s](https://github.com/k3s-io/k3s) | verbatim upstream files, not tar.zst | — |
 | k3s-system | k3s release's `k3s-images.txt` | per-image OCI `.tar.zst` assets | — |
@@ -243,6 +244,17 @@ Product notes:
   upstream `checksums.txt` and smoke-tested by loading the extension
   (`vec_version()`); consumers load it by absolute path, e.g.
   `sqlite3_load_extension` or a `*_SQLITE_VEC_EXTENSION`-style env var.
+- **chrome-for-testing**: repack of upstream's CfT `chrome` zip, rooted at
+  `chrome-for-testing/<version>/<upstream-platform>/` (upstream tokens:
+  `linux64`, `linux-arm64`, `mac-arm64`) so extraction into the milk
+  browser cache root (`~/.milk/browser`, or `CODETEL_BROWSER_CACHE_DIRECTORY`)
+  lands where `BrowserExecutables`' managed resolver looks. Pin-driven via
+  `scripts/chrome-for-testing.txt` — milk-browser's compiled-in version +
+  executable digests, not upstream latest. A version without an upstream
+  `chrome-<platform>.zip` (linux-arm64 before ~v154) ships a partial platform
+  set. Upstream has no checksums; milk-browser's compiled-in executable sha256
+  re-verifies the binary after extraction. Smoke-tested with
+  `chrome --version`.
 - **playwright-browsers**: the browser trees playwright's own installer
   produces (`install --only-shell chromium webkit`), packed as
   `ms-playwright/` including the `INSTALLATION_COMPLETE` markers. Extract into
