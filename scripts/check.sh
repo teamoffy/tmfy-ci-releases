@@ -10,6 +10,8 @@
 #                   valkey:   server/bloom     e.g. 9.1.2/1.0.1
 #                   libgit2:  libgit2/libssh2  e.g. 1.9.7/1.11.1
 #                   llama-embedding: vX.Y.Z     e.g. v0.5.0
+#                   chrome-for-testing: a CfT version e.g. 154.0.8037.0
+#                   (empty rebuilds every version in chrome-for-testing.txt)
 #                   graalvm:  a JDK version on GDS  e.g. 25.0.4.1.1
 #                   flatcar-zfs-sysext: flatcar/zfs  e.g. 4593.2.5/2.4.4
 #                   oci-mirror: <name>:<tag>   e.g. cilium:v1.20.1
@@ -49,7 +51,7 @@ force_pulumi_plugin=
 force_all_pulumi_plugins=false
 force_stacks=false
 case "$force_product" in
-"" | aws-lc | bun | graalvm | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext | playwright-browsers) ;;
+"" | aws-lc | bun | graalvm | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext | playwright-browsers | chrome-for-testing) ;;
 oci-mirror)
 	if [ -n "$force_version" ]; then
 		case "$force_version" in
@@ -589,6 +591,69 @@ decide sqlite-vec "$(force_or sqlite-vec "$(latest_gh asg017/sqlite-vec 's/^v//'
 # microsoft/playwright release tags, which match the npm versions.
 decide playwright-browsers \
 	"$(force_or playwright-browsers "$(latest_gh microsoft/playwright 's/^v//')")"
+
+# -------------------------------------------------------- chrome-for-testing
+# Managed Chromium builds for the pipeline's browser tooling. Pin-driven:
+# chrome-for-testing.txt lists the wanted versions, one per line; a forced run
+# adds/rebuilds a version. Each version fans out to all three runner platforms
+# — a leg whose platform CfT never shipped (linux-arm64 before ~v154) is
+# skipped by the repack, so a release can carry a partial platform set.
+cft_forced_v=
+cft_force_all=false
+if [ "$force_product" = chrome-for-testing ]; then
+	if [ -n "$force_version" ]; then
+		cft_forced_v=$force_version
+	else
+		cft_force_all=true
+	fi
+fi
+case "$cft_forced_v" in
+'') ;;
+*[!0-9.]* | .* | *. | *..*)
+	echo "check.sh: bad chrome-for-testing version '$cft_forced_v'" >&2
+	exit 1 ;;
+esac
+cft_candidates=
+while IFS= read -r _cft_line; do
+	case "$_cft_line" in '' | \#*) continue ;; esac
+	case "$_cft_line" in *[!0-9.]* | .* | *. | *..*)
+		echo "check.sh: bad chrome-for-testing.txt version '$_cft_line'" >&2
+		exit 1 ;;
+	esac
+	case " $cft_candidates " in
+	*" $_cft_line "*)
+		echo "check.sh: duplicate version '$_cft_line' in chrome-for-testing.txt" >&2
+		exit 1 ;;
+	esac
+	cft_candidates="${cft_candidates:+$cft_candidates }$_cft_line"
+done <"$script_dir/chrome-for-testing.txt"
+case " $cft_candidates " in
+*" $cft_forced_v "*) ;;
+*) [ -n "$cft_forced_v" ] && cft_candidates="$cft_candidates $cft_forced_v" ;;
+esac
+cft_matrix=
+cft_versions_matrix=
+cft_build=false
+# shellcheck disable=SC2086 # $cft_candidates is a word list, split intended
+for cft_v in $cft_candidates; do
+	if [ "$cft_v" != "$cft_forced_v" ] && [ "$cft_force_all" = false ] &&
+		printf '%s\n' "$existing_tags" | grep -qxF "chrome-for-testing/v$cft_v"; then
+		echo "chrome-for-testing: v$cft_v build=false"
+		continue
+	fi
+	cft_build=true
+	cft_versions_matrix="${cft_versions_matrix:+$cft_versions_matrix,}{\"version\":\"$cft_v\"}"
+	echo "chrome-for-testing: v$cft_v build=true"
+	for cft_leg in "linux-x64 ubuntu-26.04" "linux-arm64 ubuntu-26.04-arm" "darwin-arm64 macos-26"; do
+		set -- $cft_leg
+		cft_matrix="${cft_matrix:+$cft_matrix,}{\"version\":\"$cft_v\",\"platform\":\"$1\",\"runs-on\":\"$2\"}"
+	done
+done
+{
+	printf 'chrome_for_testing_build=%s\n' "$cft_build"
+	printf 'chrome_for_testing_matrix={"include":[%s]}\n' "$cft_matrix"
+	printf 'chrome_for_testing_versions_matrix={"include":[%s]}\n' "$cft_versions_matrix"
+} >>"$out"
 
 # ------------------------------------------------------------- llama-embedding
 # The version is an upstream vX.Y.Z release minus the v (tag

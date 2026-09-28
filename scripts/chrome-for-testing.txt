@@ -1,0 +1,5 @@
+# Chrome-for-Testing versions to mirror, one per line. Consumers declare the
+# versions they use, so this list is pinned deliberately rather than tracking
+# upstream latest — update it when a pin moves. A leg whose platform upstream
+# never shipped (linux-arm64 only exists from ~v154) is skipped, not failed.
+154.0.8037.0
