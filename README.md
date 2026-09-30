@@ -28,6 +28,7 @@ matrix. The newest 45 releases per product are kept.
 | libgit2 | [libgit2](https://github.com/libgit2/libgit2) + [libssh2](https://github.com/libssh2/libssh2) | linux-x64, linux-arm64 | `/opt/libgit2` |
 | sqlite-vec | [asg017/sqlite-vec](https://github.com/asg017/sqlite-vec) | linux-x64, linux-arm64, darwin-arm64 | `/opt/sqlite-vec` |
 | playwright-browsers | [microsoft/playwright](https://github.com/microsoft/playwright) browser builds (Chromium headless shell, WebKit, FFmpeg) | linux-x64, linux-arm64 (ubuntu-26.04 WebKit), darwin-arm64 | `ms-playwright/` cache tree |
+| playwright-deps | [microsoft/playwright](https://github.com/microsoft/playwright) — the apt package set `install-deps` resolves | ubuntu-26.04-x64, ubuntu-26.04-arm64 | extracted `debs/` for `dpkg -i` |
 | chrome-for-testing | [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) `chrome` builds at consumer-pinned versions | linux-x64, linux-arm64, darwin-arm64 | `chrome-for-testing/<ver>/<upstream-platform>/` under a browser cache root |
 | llama-embedding | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `vX.Y.Z` releases + [embeddinggemma-300M-GGUF](https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF) | linux-x64, linux-arm64, darwin-arm64 | `/opt/llama-embedding` |
 | k3s | [k3s-io/k3s](https://github.com/k3s-io/k3s) | verbatim upstream files, not tar.zst | — |
@@ -259,11 +260,24 @@ Product notes:
   produces (`install --only-shell chromium webkit`), packed as
   `ms-playwright/` including the `INSTALLATION_COMPLETE` markers. Extract into
   the cache parent (`~/.cache` on Linux, `~/Library/Caches` on macOS) and
-  `playwright install` has nothing to download; consumers still need
-  `playwright install-deps`/`--with-deps` for system libraries on Linux. The
+  `playwright install` has nothing to download; the system libraries
+  `install-deps` would fetch are the **playwright-deps** product. The
   linux legs build on ubuntu-26.04 runners, so the packed WebKit is the
   ubuntu-26.04 build. Smoke-tested by running the packed headless shell
   (`--version`).
+- **playwright-deps**: the system libraries a playwright browser needs on
+  Linux — captured by running the real `playwright install-deps chromium
+  webkit` on each builder with apt's download cache redirected, so the archive
+  carries exactly the `.deb` closure apt resolved for that image (transitive
+  deps included). The archive root is `debs/`; consumers extract and run
+  `sudo dpkg -i debs/*.deb`, with no apt index or archive traffic at all.
+  Asset names carry the distro (`ubuntu-26.04-x64`, `ubuntu-26.04-arm64`)
+  because the deb set only fits the ubuntu release it was captured on —
+  package names like `libasound2t64` differ across releases. A bundle
+  captured on an image can only under-cover a consumer whose image has
+  *fewer* packages preinstalled, so builder and consumer runners must track
+  the same ubuntu release. The release version follows the playwright version
+  so it publishes in lockstep with `playwright-browsers`.
 - **llama-embedding**: llama.cpp's official per-platform binary tarball plus
   the pinned EmbeddingGemma GGUF — a semantic-search test fixture.
   `opt/llama-embedding/native/` holds the libraries and CLI tools;
