@@ -51,7 +51,7 @@ force_pulumi_plugin=
 force_all_pulumi_plugins=false
 force_stacks=false
 case "$force_product" in
-"" | aws-lc | bun | graalvm | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext | playwright-browsers | chrome-for-testing) ;;
+"" | aws-lc | bun | graalvm | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext | playwright-browsers | playwright-deps | chrome-for-testing) ;;
 oci-mirror)
 	if [ -n "$force_version" ]; then
 		case "$force_version" in
@@ -589,8 +589,16 @@ decide sqlite-vec "$(force_or sqlite-vec "$(latest_gh asg017/sqlite-vec 's/^v//'
 # -------------------------------------------------------- playwright-browsers
 # Repack of the browser builds playwright's own installer downloads. Tracks
 # microsoft/playwright release tags, which match the npm versions.
+pw_version=$(latest_gh microsoft/playwright 's/^v//')
 decide playwright-browsers \
-	"$(force_or playwright-browsers "$(latest_gh microsoft/playwright 's/^v//')")"
+	"$(force_or playwright-browsers "$pw_version")"
+
+# ------------------------------------------------------------ playwright-deps
+# The apt .deb set `playwright install-deps` resolves on ubuntu — the system
+# libraries the browser repack doesn't carry. Same version source as
+# playwright-browsers so the pair stays in lockstep.
+decide playwright-deps \
+	"$(force_or playwright-deps "$pw_version")"
 
 # -------------------------------------------------------- chrome-for-testing
 # Managed Chromium builds for the pipeline's browser tooling. Pin-driven:

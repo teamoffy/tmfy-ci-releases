@@ -3,7 +3,7 @@
 ## Pipeline
 
 One workflow ([`release.yml`](.github/workflows/release.yml)), one run every
-2nd day (06:17 UTC), 47 jobs:
+2nd day (06:17 UTC), 51 jobs:
 
 1. **check** — resolves every product's target version from upstream (GitHub
    releases where they exist, git tags or index listings where they don't, the
@@ -172,6 +172,12 @@ target, so bump them deliberately via a forced version.
   publishes no browser checksums, so the installer's validation is the
   upstream check. Linux legs must build on ubuntu-26.04 runners (the packed
   WebKit is distro-versioned). Takes `PW_BROWSERS_WORK`, `PW_BROWSERS_PLATFORM`.
+- `playwright-deps-repack.sh <playwright-version>` — run playwright's real
+  `install-deps chromium webkit` on the native ubuntu runner with apt's
+  download cache redirected, so the archive carries exactly the `.deb` closure
+  apt resolved (transitive deps included); consumers `dpkg -i` it with no apt
+  traffic. The platform token carries the distro (`ubuntu-26.04-x64`) because
+  the deb set only fits that release. Takes `PW_DEPS_WORK`, `PW_DEPS_PLATFORM`.
 - `<product>-build.sh <version>...` — build, smoke-test, and pack one product.
   The mirrors use `*-repack.sh` instead (`bun-repack.sh`, `graalvm-repack.sh`,
   `mysql-repack.sh`, `sqlite-vec-repack.sh`, `llama-embedding-repack.sh`,
@@ -223,8 +229,10 @@ What runs where:
   platform-independent too: it verifies and re-archives upstream's per-platform
   tarballs on the Linux runner.
 - **Published Linux-only targets** — postgres, mysql, valkey, clickhouse,
-  pebble, typesense, libgit2, and flatcar-zfs-sysext. The first six and the
-  sysext build reject non-Linux hosts; the sysext build additionally needs
+  pebble, typesense, libgit2, flatcar-zfs-sysext, and playwright-deps. The
+  first six and the sysext build reject non-Linux hosts; playwright-deps is
+  Linux-only and distro-bound (its captured `.deb` closure only fits the
+  ubuntu release it was built on). The sysext build additionally needs
   `systemd-nspawn`/`squashfs-tools`/`kmod` (installed via apt) and must run on
   the same architecture it targets — a kernel module is not cross-built. The
   libgit2 script also has a macOS build path for local testing, but the release
