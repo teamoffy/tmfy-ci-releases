@@ -12,7 +12,8 @@
 #                   llama-embedding: vX.Y.Z     e.g. v0.5.0
 #                   chrome-for-testing: a CfT version e.g. 154.0.8037.0
 #                   (empty rebuilds every version in chrome-for-testing.txt)
-#                   graalvm:  a JDK version on GDS  e.g. 25.0.4.1.1
+#                   openjdk:  a JDK semver on Adoptium  e.g. 27.0.1
+#                   (a bare major like 27 means 27.0.0)
 #                   flatcar-zfs-sysext: flatcar/zfs  e.g. 4593.2.5/2.4.4
 #                   oci-mirror: <name>:<tag>   e.g. cilium:v1.20.1
 #                   oci-<name>: <tag>          e.g. product=oci-cilium
@@ -51,7 +52,7 @@ force_pulumi_plugin=
 force_all_pulumi_plugins=false
 force_stacks=false
 case "$force_product" in
-"" | aws-lc | bun | graalvm | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext | playwright-browsers | playwright-deps | chrome-for-testing) ;;
+"" | aws-lc | bun | openjdk | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext | playwright-browsers | playwright-deps | chrome-for-testing) ;;
 oci-mirror)
 	if [ -n "$force_version" ]; then
 		case "$force_version" in
@@ -184,8 +185,8 @@ to_epoch() {
 		date -j -f "%d %b %Y %H:%M" "$_te_d" +%s 2>/dev/null
 }
 
-# iso_epoch <ts> — epoch for ISO-8601 ("2026-09-21T22:07:22.000Z"), the GDS
-# timeCreated format. Parsed as UTC on both date flavors.
+# iso_epoch <ts> — epoch for ISO-8601 ("2026-09-21T22:07:22.000Z"), the
+# Adoptium updated_at format. Parsed as UTC on both date flavors.
 iso_epoch() {
 	_ie_d=$(printf '%s' "$1" | sed 's/\.[0-9]*//; s/Z$//; s/T/ /')
 	TZ=UTC0 date -d "$_ie_d" +%s 2>/dev/null && return 0
@@ -411,71 +412,110 @@ decide aws-lc "$(force_or aws-lc "$(latest_gh aws/aws-lc 's/^v//')")"
 # ----------------------------------------------------------------------- bun
 decide bun "$(force_or bun "$(latest_gh oven-sh/bun 's/^bun-v//')")"
 
-# ------------------------------------------------------------------- graalvm
-# Oracle GraalVM for JDK, resolved from the GDS artifact API — the same
-# endpoint setup-graalvm queries, so "latest" is real. Items carry the
-# artifact id, its sha256 (checksum), and timeCreated; the JDK version itself
-# only exists in the artifact filename, resolved via a HEAD on the content
-# URL. The newest JDK version published for all three platforms (and outside
-# the bake-in window) wins — a staged platform rollout falls back to the
-# newest version they share. A forced version is a JDK version GDS still
-# publishes for every platform.
+# ------------------------------------------------------------------- openjdk
+# OpenJDK from Adoptium (Temurin GA builds), resolved through the v3 API —
+# available_releases names the newest GA feature version (27 today, a
+# non-LTS line; the newest feature release is tracked whatever its LTS
+# status). feature_releases/<feature>/ga lists every GA release of that
+# feature, each binary carrying its download link, the API sha256, the
+# checksum sidecar link, and updated_at (the bake-in timestamp). The newest
+# semver published for all three platforms wins — a staged platform rollout
+# falls back to the newest they share. A forced version is a JDK semver
+# (27.0.1; a bare major like 27 means .0.0) Adoptium publishes for every
+# platform.
 ensure_cmds curl jq
-gds_base=https://gds.oracle.com/api/20220101/artifacts
-gds_query='productId=D53FAE8052773FFAE0530F15000AA6C6&metadata=edition:ee&metadata=isBase:True&status=PUBLISHED&responseFields=id&responseFields=checksum&responseFields=metadata&responseFields=timeCreated&displayName=Oracle%20GraalVM&sortBy=timeCreated&sortOrder=DESC&limit=15'
-gds_jdk_version() { # <artifact-id> -> JDK version inside the artifact filename
-	curl -fsSI --retry 3 --max-time 30 "$gds_base/$1/content" |
-	sed -n 's|.*graalvm-jdk-||; s|_[a-z0-9]*-[a-z0-9]*_bin\.tar\.gz.*||p' |
-	sed 's/.*-//'
+adoptium_api=https://api.adoptium.net/v3
+if [ "$force_product" = openjdk ] && [ -n "$force_version" ]; then
+	case "$force_version" in
+	*[!0-9.]*)
+		echo "check.sh: invalid openjdk version '$force_version'" >&2
+		exit 1 ;;
+	*.*.*) ;;
+	*.*) force_version="$force_version.0" ;;
+	*) force_version="$force_version.0.0" ;;
+	esac
+	openjdk_feature=${force_version%%.*}
+else
+	openjdk_feature=$(curl -fsSL --retry 3 --max-time 30 \
+		"$adoptium_api/info/available_releases" |
+		jq -r '.most_recent_feature_release')
+	[ -n "$openjdk_feature" ] && [ "$openjdk_feature" != null ] || {
+		echo "check.sh: Adoptium API returned no most_recent_feature_release" >&2
+		exit 1
+	}
+fi
+# Every platform's candidates come from one response: each GA release lists
+# all its platform binaries.
+openjdk_ga=$(curl -fsSL --retry 3 --max-time 60 \
+	"$adoptium_api/assets/feature_releases/$openjdk_feature/ga?image_type=jdk&jvm_impl=hotspot&vendor=eclipse&heap_size=normal&page_size=50") || {
+	echo "check.sh: cannot fetch Adoptium GA JDK builds for feature $openjdk_feature" >&2
+	exit 1
 }
-graalvm_candidates() { # <os> <arch> -> "jdkver id sha" rows, newest first
-	curl -fsSL --retry 3 --max-time 60 "$gds_base?$gds_query&metadata=os:$1&metadata=arch:$2" |
-	jq -r '.items[] | [.id, .checksum, .timeCreated // ""] | @tsv' |
-	while read -r _g_id _g_sha _g_tc; do
-		_g_e=$(iso_epoch "$_g_tc") || continue
-		[ -n "$_g_e" ] && [ "$_g_e" -le "$release_cutoff" ] || continue
-		_g_v=$(gds_jdk_version "$_g_id") || continue
-		# GDS lists some gated artifacts whose /content 401s — skip them.
-		[ -n "$_g_v" ] || continue
-		printf '%s %s %s\n' "$_g_v" "$_g_id" "$_g_sha"
-	done | awk '!seen[$1]++'
+openjdk_candidates() { # <os> <arch> -> "ver link sha sum" rows, newest first
+	printf '%s\n' "$openjdk_ga" |
+	jq -r --arg os "$1" --arg arch "$2" '
+		.[] | .version_data.semver as $v |
+		.binaries[] |
+		select(.os == $os and .architecture == $arch and .image_type == "jdk") |
+		[$v, .package.link, .package.checksum, .package.checksum_link,
+		 .updated_at // ""] | join(" ")' |
+	while read -r _o_sv _o_link _o_sha _o_sum _o_ts; do
+		_o_e=$(iso_epoch "$_o_ts") || continue
+		[ -n "$_o_e" ] && [ "$_o_e" -le "$release_cutoff" ] || continue
+		printf '%s %s %s %s\n' "$_o_sv" "$_o_link" "$_o_sha" "$_o_sum"
+	done | sort -k1,1 -rV | # full semver order puts respins (+NNN) first
+	awk '{ v = $1; sub(/\+.*/, "", v) } !seen[v]++ { print v, $2, $3, $4 }'
 }
-glx=$(graalvm_candidates linux amd64)
-gar=$(graalvm_candidates linux aarch64)
-gma=$(graalvm_candidates macos aarch64)
-if [ "$force_product" = graalvm ] && [ -n "$force_version" ]; then
-	graalvm_v=$force_version
-	for _g_list in "$glx" "$gar" "$gma"; do
-		printf '%s\n' "$_g_list" | awk -v v="$graalvm_v" '$1==v{f=1} END{exit !f}' || {
-			echo "check.sh: GDS has no $graalvm_v artifact for all platforms" >&2
+olx=$(openjdk_candidates linux x64)
+oar=$(openjdk_candidates linux aarch64)
+oma=$(openjdk_candidates mac aarch64)
+if [ "$force_product" = openjdk ] && [ -n "$force_version" ]; then
+	openjdk_v=$force_version
+	for _o_list in "$olx" "$oar" "$oma"; do
+		printf '%s\n' "$_o_list" | awk -v v="$openjdk_v" '$1==v{f=1} END{exit !f}' || {
+			echo "check.sh: Adoptium has no openjdk $openjdk_v build for all platforms" >&2
 			exit 1
 		}
 	done
 else
-	graalvm_v=$(printf '%s\n' "$glx" | cut -d' ' -f1 | sort -uVr |
-		while read -r _g_v; do
+	openjdk_v=$(printf '%s\n' "$olx" | cut -d' ' -f1 | sort -uVr |
+		while read -r _o_v; do
 			# shellcheck disable=SC2015 # || continue is the intended either-failed path
-			printf '%s\n' "$gar" | cut -d' ' -f1 | grep -qx "$_g_v" &&
-				printf '%s\n' "$gma" | cut -d' ' -f1 | grep -qx "$_g_v" || continue
-			printf '%s\n' "$_g_v"
+			printf '%s\n' "$oar" | cut -d' ' -f1 | grep -qx "$_o_v" &&
+				printf '%s\n' "$oma" | cut -d' ' -f1 | grep -qx "$_o_v" || continue
+			printf '%s\n' "$_o_v"
 			break
 		done)
 fi
-[ -n "$graalvm_v" ] || {
-	echo "check.sh: no GraalVM version on GDS for all platforms" >&2
-	exit 1
-}
-_g_row() { awk -v v="$graalvm_v" '$1==v{print $2, $3; exit}'; }
-glx_row=$(printf '%s\n' "$glx" | _g_row)
-gar_row=$(printf '%s\n' "$gar" | _g_row)
-gma_row=$(printf '%s\n' "$gma" | _g_row)
-graalvm_artifacts=$(jq -nc \
-	--arg i1 "${glx_row%% *}" --arg s1 "${glx_row##* }" \
-	--arg i2 "${gar_row%% *}" --arg s2 "${gar_row##* }" \
-	--arg i3 "${gma_row%% *}" --arg s3 "${gma_row##* }" \
-	'{"linux-x64":{id:$i1,sha:$s1},"linux-arm64":{id:$i2,sha:$s2},"darwin-arm64":{id:$i3,sha:$s3}}')
-printf 'graalvm_artifacts=%s\n' "$graalvm_artifacts" >>"$out"
-decide graalvm "$graalvm_v"
+if [ -z "$openjdk_v" ] && [ "$release_min_age" -gt 0 ]; then
+	# Every build of the newest feature is inside the bake-in window (a
+	# just-published GA with no aged in-feature history): defer, like
+	# Flatcar's channel, so a release that can still be pulled never gets
+	# mirrored. One run later the window has passed and resolution proceeds.
+	openjdk_v=$(printf '%s\n' "$openjdk_ga" | jq -r '.[].version_data.semver' |
+		sed 's/+.*//' | sort -rV | head -1)
+	printf 'openjdk_version=%s\nopenjdk_build=false\n' "$openjdk_v" >>"$out"
+	echo "openjdk: $openjdk_v inside the 12h bake-in window — deferring"
+else
+	[ -n "$openjdk_v" ] || {
+		echo "check.sh: no OpenJDK GA build on Adoptium for all platforms" >&2
+		exit 1
+	}
+	_o_row() { awk -v v="$openjdk_v" '$1==v{print $2, $3, $4; exit}'; }
+	olx_row=$(printf '%s\n' "$olx" | _o_row)
+	oar_row=$(printf '%s\n' "$oar" | _o_row)
+	oma_row=$(printf '%s\n' "$oma" | _o_row)
+	[ -n "$olx_row" ] && [ -n "$oar_row" ] && [ -n "$oma_row" ] || {
+		echo "check.sh: missing an Adoptium $openjdk_v artifact for some platform" >&2
+		exit 1
+	}
+	openjdk_artifacts=$(jq -nc \
+		--arg lx "$olx_row" --arg ar "$oar_row" --arg ma "$oma_row" '
+		def row($r): $r | split(" ") | {url: .[0], sha: .[1], sum: .[2]};
+		{"linux-x64": row($lx), "linux-arm64": row($ar), "darwin-arm64": row($ma)}')
+	printf 'openjdk_artifacts=%s\n' "$openjdk_artifacts" >>"$out"
+	decide openjdk "$openjdk_v"
+fi
 
 # ------------------------------------------------------------------- zlib-ng
 decide zlib-ng "$(force_or zlib-ng "$(latest_gh zlib-ng/zlib-ng 's/^v//')")"

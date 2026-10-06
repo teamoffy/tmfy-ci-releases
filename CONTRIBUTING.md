@@ -7,7 +7,7 @@ One workflow ([`release.yml`](.github/workflows/release.yml)), one run every
 
 1. **check** — resolves every product's target version from upstream (GitHub
    releases where they exist, git tags or index listings where they don't, the
-   Flatcar channel's `version.txt`, and the GDS artifacts API for GraalVM) and
+   Flatcar channel's `version.txt`, and the Adoptium v3 API for OpenJDK) and
    decides whether that version is already released here. For the `oci-*`
    image mirrors it also probes each
    resolved tag on its registry, and for `oci-*`, `k3s`, `k3s-system`,
@@ -42,8 +42,9 @@ scheduled check.
 `version` is optional (upstream latest if empty); multi-component products
 take slash-joined versions: postgres `18.6/2.29.2/0.8.6/1.1.1`, valkey
 `9.1.2/1.0.1`, libgit2 `1.9.7/1.11.1`, flatcar-zfs-sysext `4593.2.5/2.4.4`.
-graalvm resolves its newest GDS-published JDK version when `version` is empty;
-a supplied version must exist on GDS for all three platforms (the check fails
+openjdk resolves the newest GA feature release when `version` is empty;
+a supplied version is a JDK semver Adoptium publishes for all three
+platforms — `27.0.1`, or a bare major like `27` for `.0.0` (the check fails
 otherwise).
 `oci-mirror` takes `<name>:<tag>` from
 [`oci-images.txt`](scripts/oci-images.txt) (e.g. `cilium:v1.20.1`), or force a
@@ -148,14 +149,15 @@ target, so bump them deliberately via a forced version.
   `pulumi-plugin-<name>-<version>-<platform>.tar.zst`, staging
   `pulumi-resource-<name>` at `usr/local/bin/`. Takes `PULUMI_PLUGIN_WORK`,
   `GH_TOKEN`.
-- `graalvm-repack.sh <version> <platform> <gds-artifact-id> <sha256>` —
-  download one GDS bundle, verify the sha256 from the API response and the
-  object-storage `opc-meta-content-sha256` header, restage the JDK home as
-  `home/` (flattening the macOS `Contents/Home` nesting), and pack a tar.zst.
-  `check.sh` resolves the version plus per-platform artifact id + sha256 from
-  the GDS artifacts API (the newest JDK version published for all platforms;
-  a `version` input must exist on GDS for all platforms). Takes
-  `GRAALVM_WORK`.
+- `openjdk-repack.sh <version> <platform> <url> <sha256> <checksum-url>` —
+  download one Temurin bundle, verify the sha256 from the Adoptium API
+  response and the upstream `.sha256.txt` sidecar the checksum link points
+  at, restage the JDK home as `home/` (flattening the macOS `Contents/Home`
+  nesting), and pack a tar.zst.
+  `check.sh` resolves the version plus per-platform URL + sha256 + sidecar
+  link from the Adoptium v3 API (the newest GA feature release published for
+  all platforms; a `version` input must exist on Adoptium for all
+  platforms). Takes `OPENJDK_WORK`.
 - `chrome-for-testing.txt` — pinned CfT versions to mirror, one per line.
   Consumer-declared pins, not upstream latest: update the list when a pin
   moves, and delete lines whose pins were dropped.
@@ -179,7 +181,7 @@ target, so bump them deliberately via a forced version.
   traffic. The platform token carries the distro (`ubuntu-26.04-x64`) because
   the deb set only fits that release. Takes `PW_DEPS_WORK`, `PW_DEPS_PLATFORM`.
 - `<product>-build.sh <version>...` — build, smoke-test, and pack one product.
-  The mirrors use `*-repack.sh` instead (`bun-repack.sh`, `graalvm-repack.sh`,
+  The mirrors use `*-repack.sh` instead (`bun-repack.sh`, `openjdk-repack.sh`,
   `mysql-repack.sh`, `sqlite-vec-repack.sh`, `llama-embedding-repack.sh`,
   `playwright-browsers-repack.sh`):
   they verify upstream checksums where published and re-archive rather than
@@ -222,7 +224,7 @@ What runs where:
   shell. chrome-for-testing repacks upstream's CfT `chrome` zip on each
   platform's native runner and runs the packed binary (`--version`); its
   versions come from `chrome-for-testing.txt` pins, not upstream latest.
-  GraalVM repacks the resolved GDS
+  OpenJDK repacks the resolved Temurin
   bundles on the Linux runner for all three platforms — the repack is
   platform-independent, and its post-pack check re-extracts `home/bin/java`
   rather than executing the JDK. The `pulumi-plugin-*` repack is
