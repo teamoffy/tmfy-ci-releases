@@ -16,7 +16,7 @@ matrix. The newest 45 releases per product are kept.
 |---|---|---|---|
 | aws-lc | [aws/aws-lc](https://github.com/aws/aws-lc) | linux-x64, linux-arm64, darwin-arm64 | `/opt/aws-lc` |
 | bun | [oven-sh/bun](https://github.com/oven-sh/bun) | linux-x64, linux-aarch64, darwin-x64, darwin-aarch64 | `bun-<platform>/` |
-| graalvm | [Oracle GraalVM for JDK](https://www.oracle.com/downloads/graalvm-downloads.html) via the GDS artifacts API | linux-x64, linux-arm64, darwin-arm64 | `home/` (the JDK home) |
+| openjdk | [Eclipse Temurin (Adoptium)](https://adoptium.net/) GA builds via the v3 API | linux-x64, linux-arm64, darwin-arm64 | `home/` (the JDK home) |
 | zlib-ng | [zlib-ng/zlib-ng](https://github.com/zlib-ng/zlib-ng) | linux-x64, linux-arm64, darwin-arm64 | `/opt/zlib-ng` |
 | postgres | PostgreSQL 18.x + timescaledb + pgvector + VectorChord | linux-x64, linux-arm64 | `/opt/postgresql` |
 | mysql | [MySQL](https://github.com/mysql/mysql-server) latest LTS "Linux - Generic" repack | linux-arm64 | `/opt/mysql` |
@@ -49,11 +49,11 @@ Version tracking:
   current release (`amd64-usr/current/version.txt`), not a GitHub repo —
   Flatcar has no releases API. The sysext version is the combo
   `<flatcar>-zfs<zfs>`.
-- **graalvm** has no `releases/latest`-style upstream either: Oracle GDS
-  bundles are content-addressed artifacts, so the newest JDK version
-  published for all three platforms is resolved through the GDS artifacts
-  API (the same endpoint `graalvm/setup-graalvm` uses) — artifact ids and
-  sha256s come straight from the API at check time.
+- **openjdk** tracks the newest GA feature release on Adoptium (the v3 API's
+  `most_recent_feature_release` — 27 today, a non-LTS line; whatever is
+  newest wins regardless of LTS status). `feature_releases/<f>/ga` supplies
+  each platform's download URL + sha256 at check time, and the release
+  version is the JDK semver (`27.0.0`, `27.0.1`, …).
 - **mysql** tracks the latest LTS line, not the Innovation stream: Oracle's
   apt repo names its LTS components `mysql-<line>-lts`, so the highest is
   the current LTS series (9.7 today); within it, the newest git tag whose
@@ -186,7 +186,7 @@ Release tags are `<product>/v<version>`. Native-product assets are named
 asset names and layouts are described above. Every release ships
 `SHA256SUMS.txt`. Compiled-product archives embed `BUILD-INFO.txt` with
 upstream URLs, checksums, and the build recipe. Bun preserves the upstream
-archive layout, GraalVM repacks the upstream JDK home as-is, the verbatim
+archive layout, OpenJDK repacks the upstream JDK home as-is, the verbatim
 mirrors (k3s, flatcar) ship upstream files untouched, the ci-tools and
 pulumi-plugin repacks carry only their staged binaries, and OCI assets are
 self-contained image layouts — none of those carries `BUILD-INFO.txt`; their
@@ -234,12 +234,12 @@ Product notes:
   `install bun-<platform>/bun ~/.bun/bin/bun`. Inside Actions, pinning a version
   in `oven-sh/setup-bun` is usually simpler, since its cache only engages for
   pinned versions; this mirror is for cold starts and non-Actions use.
-- **graalvm**: repack of Oracle GDS JDK bundles resolved at check time (the
-  newest JDK version published for all platforms; artifact id + sha256 come
-  from the GDS API). The archive root is `home/`, so extract at the
-  destination (`tar --zstd -xf <asset> -C <dest>`) and use `<dest>/home` as
-  `JAVA_HOME` (`<dest>/home/bin/java`); the macOS bundle's `Contents/Home`
-  nesting is flattened to the same layout.
+- **openjdk**: repack of Adoptium Temurin JDK bundles resolved at check time
+  (the newest GA feature release published for all platforms; download URL +
+  sha256 come from the Adoptium v3 API). The archive root is `home/`, so
+  extract at the destination (`tar --zstd -xf <asset> -C <dest>`) and use
+  `<dest>/home` as `JAVA_HOME` (`<dest>/home/bin/java`); the macOS bundle's
+  `Contents/Home` nesting is flattened to the same layout.
 - **sqlite-vec**: repack of upstream's loadable `vec0` extension at
   `opt/sqlite-vec/lib/vec0.so` (`vec0.dylib` on macOS). Verified against
   upstream `checksums.txt` and smoke-tested by loading the extension

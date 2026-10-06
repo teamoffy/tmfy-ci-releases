@@ -12,7 +12,7 @@ on:
       product:
         description: >-
           Product to force-rebuild (always builds and replaces its release assets). One of:
-          aws-lc, bun, graalvm, zlib-ng, postgres, mysql, valkey, clickhouse,
+          aws-lc, bun, openjdk, zlib-ng, postgres, mysql, valkey, clickhouse,
           pebble, typesense, zstd, libgit2, sqlite-vec, llama-embedding,
           playwright-browsers, playwright-deps, chrome-for-testing,
           oci-mirror (or oci-<name>), k3s, k3s-system, flatcar,
@@ -35,8 +35,9 @@ on:
           oci-mirror: name:tag from oci-images.txt e.g. cilium:v1.20.1
           oci-<name>: the image tag e.g. v1.20.1 (empty = newest servable
           upstream release)
-          graalvm: the JDK version e.g. 25.0.4.1.1 (empty = newest version
-          published on GDS for all platforms)
+          openjdk: the JDK semver e.g. 27.0.1 (a bare major like 27 means
+          .0.0; empty = newest GA feature release Adoptium publishes for all
+          platforms)
           flatcar-zfs-sysext: flatcar/zfs e.g. 4593.2.5/2.4.4
           ci-tools or <tool name>: the upstream tag e.g. kubectl:v1.36.4
           (empty ci-tools rebuilds every tool in ci-tools.txt at latest)
@@ -66,9 +67,9 @@ jobs:
       aws_lc_build: ${{ steps.resolve.outputs.aws_lc_build }}
       bun_version: ${{ steps.resolve.outputs.bun_version }}
       bun_build: ${{ steps.resolve.outputs.bun_build }}
-      graalvm_version: ${{ steps.resolve.outputs.graalvm_version }}
-      graalvm_artifacts: ${{ steps.resolve.outputs.graalvm_artifacts }}
-      graalvm_build: ${{ steps.resolve.outputs.graalvm_build }}
+      openjdk_version: ${{ steps.resolve.outputs.openjdk_version }}
+      openjdk_artifacts: ${{ steps.resolve.outputs.openjdk_artifacts }}
+      openjdk_build: ${{ steps.resolve.outputs.openjdk_build }}
       zlib_ng_version: ${{ steps.resolve.outputs.zlib_ng_version }}
       zlib_ng_build: ${{ steps.resolve.outputs.zlib_ng_build }}
       postgres_pg: ${{ steps.resolve.outputs.postgres_pg }}
@@ -293,12 +294,13 @@ jobs:
           - Licenses: MIT for Bun itself; the binary statically links JavaScriptCore (LGPL-2.1) and other vendored libraries — see the upstream LICENSE.md
           EOF
 
-  # --------------------------------------------------------------- graalvm
-  # check.sh resolves the newest JDK version GDS publishes for all three
-  # platforms plus each platform's artifact id + sha256 (graalvm_artifacts).
-  build-graalvm:
+  # --------------------------------------------------------------- openjdk
+  # check.sh resolves the newest GA feature release Adoptium publishes for
+  # all three platforms plus each platform's download URL, sha256, and
+  # checksum sidecar link (openjdk_artifacts).
+  build-openjdk:
     needs: check
-    if: needs.check.outputs.graalvm_build == 'true'
+    if: needs.check.outputs.openjdk_build == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     strategy:
@@ -310,36 +312,36 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           show-progress: false
-      - name: Repack GraalVM bundle
+      - name: Repack OpenJDK bundle
         env:
-          GRAALVM_WORK: ${{ runner.temp }}/graalvm-work
-          GRAALVM_ARTIFACTS: ${{ needs.check.outputs.graalvm_artifacts }}
+          OPENJDK_WORK: ${{ runner.temp }}/openjdk-work
+          OPENJDK_ARTIFACTS: ${{ needs.check.outputs.openjdk_artifacts }}
         run: |
-          spec=$(printf '%s' "$GRAALVM_ARTIFACTS" | \
-            jq -r --arg p "${{ matrix.platform }}" '.[$p].id + " " + .[$p].sha')
-          # shellcheck disable=SC2086 # "id sha" word-split intended
-          sh scripts/graalvm-repack.sh \
-            "${{ needs.check.outputs.graalvm_version }}" \
+          spec=$(printf '%s' "$OPENJDK_ARTIFACTS" | \
+            jq -r --arg p "${{ matrix.platform }}" '.[$p].url + " " + .[$p].sha + " " + .[$p].sum')
+          # shellcheck disable=SC2086 # "url sha sum" word-split intended
+          sh scripts/openjdk-repack.sh \
+            "${{ needs.check.outputs.openjdk_version }}" \
             "${{ matrix.platform }}" $spec
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: graalvm-${{ matrix.platform }}
-          path: ${{ runner.temp }}/graalvm-work/out/
+          name: openjdk-${{ matrix.platform }}
+          path: ${{ runner.temp }}/openjdk-work/out/
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
 
-  release-graalvm:
-    needs: [check, build-graalvm]
-    if: needs.check.outputs.graalvm_build == 'true' && needs.build-graalvm.result == 'success'
+  release-openjdk:
+    needs: [check, build-openjdk]
+    if: needs.check.outputs.openjdk_build == 'true' && needs.build-openjdk.result == 'success'
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 10
     permissions:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      VERSION: ${{ needs.check.outputs.graalvm_version }}
+      VERSION: ${{ needs.check.outputs.openjdk_version }}
     steps:
       - name: Clone the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -348,22 +350,22 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: graalvm-*
+          pattern: openjdk-*
           merge-multiple: true
           path: assets
       - name: Publish release
         run: |
           set -eu
-          sh scripts/publish-release.sh "graalvm/v${VERSION}" "graalvm v${VERSION}" assets <<EOF
-          Oracle GraalVM for JDK ${VERSION} repacked from the GDS artifacts as max-zstd (level 22) tar.zst.
+          sh scripts/publish-release.sh "openjdk/v${VERSION}" "openjdk v${VERSION}" assets <<EOF
+          Eclipse Temurin (Adoptium) OpenJDK ${VERSION} repacked from the GA artifacts as max-zstd (level 22) tar.zst.
 
-          - Upstream: https://www.oracle.com/downloads/graalvm-downloads.html (artifact ids + sha256 resolved from the GDS artifacts API — the same endpoint graalvm/setup-graalvm uses)
-          - Upstream checksums were verified before repacking (GDS checksum field + opc-meta-content-sha256 object metadata cross-check).
+          - Upstream: https://adoptium.net/temurin/releases/?version=${VERSION%%.*} (download URL + sha256 resolved from the Adoptium v3 API)
+          - Upstream checksums were verified before repacking (API checksum field + the published .sha256.txt sidecar cross-check).
           - Platforms: linux-x64, linux-arm64, darwin-arm64 — no linux-x86-32, no darwin-x64, no Windows (matching supported runner targets).
           - Layout: the archive root is \`home/\`, the JDK home itself (\`home/bin/java\`); the macOS bundle's \`Contents/Home\` nesting is flattened to the same contract. Extract at the destination: \`tar --zstd -xf <asset> -C <dest>\` gives \`<dest>/home/bin/java\`.
           - Extraction needs zstd (preinstalled on GitHub runner images).
           - Verify: \`sha256sum -c SHA256SUMS.txt\`
-          - Licenses: GraalVM Free Terms and Conditions (GFTC) — redistribution terms per the upstream download page; the bundled components carry their own licenses under \`home/legal/\` if present.
+          - Licenses: GNU GPLv2 with the Classpath Exception (GPLv2+CE) — see \`home/legal/\` inside the archive.
           EOF
 
   # --------------------------------------------------------------- zlib-ng
@@ -1990,7 +1992,7 @@ jobs:
       [
         release-aws-lc,
         release-bun,
-        release-graalvm,
+        release-openjdk,
         release-zlib-ng,
         release-postgres,
         release-valkey,
