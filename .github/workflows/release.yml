@@ -1346,6 +1346,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
           - platform: linux-arm64
             runs-on: ubuntu-26.04-arm
     steps:
@@ -1394,10 +1396,10 @@ jobs:
           sh scripts/publish-release.sh "mysql/v${VERSION}" "mysql ${VERSION}" assets <<EOF
           MySQL \`${VERSION}\` server repack for CI test lanes — Oracle "Linux - Generic" binaries.
 
-          - Upstream: https://dev.mysql.com/get/Downloads/MySQL-${VERSION%.*}/mysql-${VERSION}-linux-glibc2.28-aarch64.tar.xz
+          - Upstream: https://dev.mysql.com/get/Downloads/MySQL-${VERSION%.*}/mysql-${VERSION}-linux-glibc2.28-{x86_64,aarch64}.tar.xz
           - Repack: \`bin/{mysqld,mysql,mysqladmin}\`, \`lib/{plugin,private,mecab,libmysqlclient.so*}\`, \`share/\`, \`LICENSE\`; binaries and plugins stripped. Runtime deps the ubuntu images lack (libaio, libnuma, ncurses/tinfo) are bundled into \`lib/private/\`, which the binaries' \`\$ORIGIN/../lib/private\` RUNPATH covers.
           - Smoke-tested: \`--initialize-insecure\` + server boot + \`mysqladmin ping\` + a CREATE/DROP DATABASE round-trip over the unix socket.
-          - Targets: linux-arm64 (ubuntu-26.04-arm).
+          - Targets: linux-x64 (ubuntu-26.04) and linux-arm64 (ubuntu-26.04-arm).
           - Layout: the archive root is \`opt/mysql\` — extract at \`/\` to install into \`/opt/mysql\`. Datadir initialization, users, and startup flags stay consumer-side.
           - Verify: \`sha256sum -c SHA256SUMS.txt\`
           - Licenses: MySQL is GPL-2.0 with the FOSS License Exception — see \`LICENSE\` in the archive.

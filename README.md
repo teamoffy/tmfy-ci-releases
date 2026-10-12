@@ -19,7 +19,7 @@ matrix. The newest 45 releases per product are kept.
 | openjdk | [Eclipse Temurin (Adoptium)](https://adoptium.net/) GA builds via the v3 API | linux-x64, linux-arm64, darwin-arm64 | `home/` (the JDK home) |
 | zlib-ng | [zlib-ng/zlib-ng](https://github.com/zlib-ng/zlib-ng) | linux-x64, linux-arm64, darwin-arm64 | `/opt/zlib-ng` |
 | postgres | PostgreSQL 18.x + timescaledb + pgvector + VectorChord | linux-x64, linux-arm64 | `/opt/postgresql` |
-| mysql | [MySQL](https://github.com/mysql/mysql-server) latest LTS "Linux - Generic" repack | linux-arm64 | `/opt/mysql` |
+| mysql | [MySQL](https://github.com/mysql/mysql-server) latest LTS "Linux - Generic" repack | linux-x64, linux-arm64 | `/opt/mysql` |
 | valkey | [valkey](https://github.com/valkey-io/valkey) + valkey-bloom | linux-x64, linux-arm64 | `/opt/valkey` |
 | clickhouse | [ClickHouse](https://github.com/ClickHouse/ClickHouse) LTS tags | linux-x64, linux-arm64 | `/opt/clickhouse` |
 | pebble | [letsencrypt/pebble](https://github.com/letsencrypt/pebble) | linux-x64, linux-arm64 | `/opt/pebble` |
