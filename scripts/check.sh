@@ -752,6 +752,9 @@ mysql_v=$(git ls-remote --tags https://github.com/mysql/mysql-server "refs/tags/
 		_m_e=$(tag_epoch mysql/mysql-server "mysql-$_m_v") || continue
 		[ -n "$_m_e" ] && [ "$_m_e" -le "$release_cutoff" ] || continue
 		curl -fsSI --retry 3 -o /dev/null --max-time 20 \
+			"https://dev.mysql.com/get/Downloads/MySQL-${_m_v%.*}/mysql-${_m_v}-linux-glibc2.28-x86_64.tar.xz" \
+			2>/dev/null || continue
+		curl -fsSI --retry 3 -o /dev/null --max-time 20 \
 			"https://dev.mysql.com/get/Downloads/MySQL-${_m_v%.*}/mysql-${_m_v}-linux-glibc2.28-aarch64.tar.xz" \
 			2>/dev/null || continue
 		printf '%s\n' "$_m_v"
