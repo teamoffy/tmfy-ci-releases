@@ -25,6 +25,7 @@ esac
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$script_dir/lib.sh"
+setup_cpu_baseline "$platform"
 rm -rf "$work"
 mkdir -p "$prefix" "$out"
 
@@ -127,6 +128,9 @@ esac
 	echo "product=libgit2"
 	echo "version=${version}-libssh2-${libssh2_version}"
 	echo "platform=$platform"
+	echo "cpu-baseline=$CPU_BASELINE"
+	echo "cflags=$CFLAGS"
+	echo "cxxflags=$CXXFLAGS"
 	echo "upstream-url=$url"
 	echo "upstream-sha256=$upstream_sha"
 	echo "libssh2-url=$libssh2_url"

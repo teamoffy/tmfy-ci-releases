@@ -22,6 +22,7 @@ prefix="$work/stage/opt/postgresql"
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$script_dir/lib.sh"
+setup_cpu_baseline "$platform"
 require_linux postgres-build.sh "VectorChord ships Linux binaries only, and the asset targets Linux runners"
 rm -rf "$work"
 mkdir -p "$prefix" "$out" "$work/src/postgresql" "$work/src/timescaledb" "$work/src/pgvector"
@@ -64,8 +65,8 @@ tar -xzf "$work/timescaledb.tar.gz" -C "$work/src/timescaledb" --strip-component
 fetch "https://github.com/pgvector/pgvector/archive/refs/tags/v${vec_version}.tar.gz" \
 	"$work/pgvector.tar.gz" "${PGVECTOR_UPSTREAM_SHA256:-}"
 tar -xzf "$work/pgvector.tar.gz" -C "$work/src/pgvector" --strip-components=1
-make -s -C "$work/src/pgvector" -j "$(ncpu)" PG_CONFIG="$prefix/bin/pg_config"
-make -s -C "$work/src/pgvector" install PG_CONFIG="$prefix/bin/pg_config"
+make -s -C "$work/src/pgvector" -j "$(ncpu)" PG_CONFIG="$prefix/bin/pg_config" OPTFLAGS="$CPU_BASELINE_FLAGS"
+make -s -C "$work/src/pgvector" install PG_CONFIG="$prefix/bin/pg_config" OPTFLAGS="$CPU_BASELINE_FLAGS"
 
 # -------------------------------------------------------------------- vchord
 # Prebuilt .deb keyed to the PG major. Pass `none` as the vchord arg to skip it.
@@ -122,8 +123,12 @@ fi
 	echo "product=postgres"
 	echo "version=${pg_version}-timescale${ts_version}-pgvector${vec_version}-vchord${vchord_version}"
 	echo "platform=$platform"
+	echo "cpu-baseline=$CPU_BASELINE"
+	echo "cflags=$CFLAGS"
+	echo "cxxflags=$CXXFLAGS"
 	echo "configure=--with-icu --with-openssl (plus contrib/pgcrypto, contrib/pg_stat_statements)"
 	echo "timescaledb-bootstrap=-DREGRESS_CHECKS=OFF -DWARNINGS_AS_ERRORS=OFF"
+	echo "pgvector-optflags=$CPU_BASELINE_FLAGS (runtime CPU dispatch enabled)"
 	echo "cc=$(${CC:-cc} --version | head -n 1)"
 	echo "upstream-checksums:"
 	cat "$UPSTREAM_SHA_LOG"
