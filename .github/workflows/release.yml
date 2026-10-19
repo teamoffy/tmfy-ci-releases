@@ -510,10 +510,10 @@ jobs:
           Prebuilt PostgreSQL \`${PG}\` with timescaledb \`${TS}\`, pgvector \`${VEC}\`, and VectorChord \`${VCHORD}\` for CI consumption.
 
           - Upstream: https://ftp.postgresql.org/pub/source/v${PG}/ , https://github.com/timescale/timescaledb/releases/tag/${TS} , https://github.com/pgvector/pgvector/tree/v${VEC} , https://github.com/tensorchord/VectorChord/releases/tag/${VCHORD}
-          - Build: \`./configure --with-icu --with-openssl\` + \`contrib/pgcrypto\`; timescaledb bootstrap \`-DREGRESS_CHECKS=OFF -DWARNINGS_AS_ERRORS=OFF\`; VectorChord from the official \`postgresql-${PG%%.*}\` .deb.
-          - Smoke-tested: initdb + server boot + \`CREATE EXTENSION\` for timescaledb, vector, and vchord.
+          - Build: \`./configure --with-icu --with-openssl\` + \`contrib/pgcrypto\` and \`contrib/pg_stat_statements\`; timescaledb bootstrap \`-DREGRESS_CHECKS=OFF -DWARNINGS_AS_ERRORS=OFF\`; VectorChord from the official \`postgresql-${PG%%.*}\` .deb.
+          - Smoke-tested: initdb + server boot + \`CREATE EXTENSION\` for pgcrypto, pg_stat_statements, timescaledb, vector, and vchord; live query of the pg_stat_statements view.
           - Targets: linux-x64 (ubuntu-26.04 / gcc), linux-arm64 (ubuntu-26.04-arm / gcc). Links against the runner images' system OpenSSL/ICU/readline/zlib.
-          - Layout: the archive root is \`opt/postgresql\` — extract at \`/\` to install into \`/opt/postgresql\`. Starting clusters and setting \`shared_preload_libraries=timescaledb,vchord\` stay consumer-side.
+          - Layout: the archive root is \`opt/postgresql\` — extract at \`/\` to install into \`/opt/postgresql\`. Starting clusters and setting \`shared_preload_libraries=timescaledb,vchord,pg_stat_statements\` stay consumer-side; run \`CREATE EXTENSION pg_stat_statements\` in each database that needs query statistics.
           - Verify: \`sha256sum -c SHA256SUMS.txt\`
           - Licenses: PostgreSQL License (postgres, pgvector); timescaledb is Apache-2.0 outside \`tsl/\` and Timescale License (TSL) within it — this build includes the TSL \`-tsl\` module; VectorChord is dual AGPL-3.0 / Elastic License v2
           EOF

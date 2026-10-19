@@ -46,6 +46,7 @@ tar -xzf "$work/postgresql.tar.gz" -C "$work/src/postgresql" --strip-components=
 	make -s -j "$(ncpu)"
 	make -s install
 	make -s -C contrib/pgcrypto install
+	make -s -C contrib/pg_stat_statements install
 )
 
 # ------------------------------------------------------------------ timescaledb
@@ -90,15 +91,17 @@ fi
 data="$work/pgdata"
 "$prefix/bin/initdb" -D "$data" --auth-host=trust --auth-local=trust --username=postgres
 "$prefix/bin/pg_ctl" -D "$data" -l "$work/pg.log" \
-	-o "-p 55432 -c fsync=off -c synchronous_commit=off -c full_page_writes=off -c autovacuum=off -c shared_preload_libraries=${vchord_preload}" \
+	-o "-p 55432 -c fsync=off -c synchronous_commit=off -c full_page_writes=off -c autovacuum=off -c shared_preload_libraries=pg_stat_statements,${vchord_preload}" \
 	start
 "$prefix/bin/pg_isready" -h 127.0.0.1 -p 55432
 "$prefix/bin/psql" -h 127.0.0.1 -p 55432 -U postgres -d postgres -v ON_ERROR_STOP=1 \
-	-c "CREATE EXTENSION IF NOT EXISTS timescaledb; CREATE EXTENSION IF NOT EXISTS vector; $vchord_exts"
+	-c "CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS pg_stat_statements; CREATE EXTENSION IF NOT EXISTS timescaledb; CREATE EXTENSION IF NOT EXISTS vector; $vchord_exts"
+"$prefix/bin/psql" -h 127.0.0.1 -p 55432 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+	-c "SELECT count(*) FROM pg_stat_statements"
 extension_list=$("$prefix/bin/psql" -h 127.0.0.1 -p 55432 -U postgres -d postgres -Atc \
 	"SELECT extname || '=' || extversion FROM pg_extension ORDER BY 1")
 echo "$extension_list"
-for want in timescaledb vector; do
+for want in pgcrypto pg_stat_statements timescaledb vector; do
 	echo "$extension_list" | grep -q "^${want}=" || {
 		echo "postgres-build.sh: extension ${want} missing after CREATE" >&2
 		"$prefix/bin/pg_ctl" -D "$data" stop -m fast || true
@@ -119,7 +122,7 @@ fi
 	echo "product=postgres"
 	echo "version=${pg_version}-timescale${ts_version}-pgvector${vec_version}-vchord${vchord_version}"
 	echo "platform=$platform"
-	echo "configure=--with-icu --with-openssl (plus contrib/pgcrypto)"
+	echo "configure=--with-icu --with-openssl (plus contrib/pgcrypto, contrib/pg_stat_statements)"
 	echo "timescaledb-bootstrap=-DREGRESS_CHECKS=OFF -DWARNINGS_AS_ERRORS=OFF"
 	echo "cc=$(${CC:-cc} --version | head -n 1)"
 	echo "upstream-checksums:"
@@ -143,6 +146,11 @@ verify_extract "$asset" "$verify"
 }
 [ -f "$verify/opt/postgresql/share/extension/timescaledb.control" ] || {
 	echo "postgres-build.sh: packaged archive is missing timescaledb extension files" >&2
+	exit 1
+}
+[ -f "$verify/opt/postgresql/lib/pg_stat_statements.so" ] &&
+	[ -f "$verify/opt/postgresql/share/extension/pg_stat_statements.control" ] || {
+	echo "postgres-build.sh: packaged archive is missing pg_stat_statements extension files" >&2
 	exit 1
 }
 echo "built $asset"
