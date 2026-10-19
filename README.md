@@ -212,8 +212,11 @@ Product notes:
 - **aws-lc**, **zlib-ng**: shared libs — run `sudo ldconfig` on Linux. zlib-ng
   exposes the zlib-ng API (`zlib-ng.h`, `-lz-ng`); point builds at the prefix via
   pkg-config or `-I`/`-L`. aws-lc macOS dylibs use `/opt/aws-lc/lib` install names.
-- **postgres**: server + timescaledb + pgvector + vchord + pgcrypto. Cluster
-  creation and `shared_preload_libraries=timescaledb,vchord` are consumer-side.
+- **postgres**: server + timescaledb + pgvector + vchord + pgcrypto + pg_stat_statements.
+  Cluster creation and setting
+  `shared_preload_libraries=timescaledb,vchord,pg_stat_statements` are consumer-side.
+  Run `CREATE EXTENSION pg_stat_statements` in each database that needs query
+  statistics.
 - **mysql**: repack of Oracle's "Linux - Generic" binaries for CI test lanes —
   `opt/mysql/bin/{mysqld,mysql,mysqladmin}`, `lib/`, `share/`; the runtime deps
   the ubuntu images lack (libaio, libnuma, ncurses) are bundled into
