@@ -32,6 +32,9 @@ jobs:
             sh -n "$script"
           done
           shellcheck scripts/*.sh
+      - name: Check CPU baselines
+        shell: sh
+        run: sh scripts/cpu-baseline-test.sh
       - name: Check OCI image manifest
         run: |
           set -eu

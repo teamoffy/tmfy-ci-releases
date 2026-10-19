@@ -98,6 +98,28 @@ ensure_cmds() {
 	fi
 }
 
+setup_cpu_baseline() {
+	case "$1" in
+	linux-x64)
+		CPU_BASELINE=x86-64
+		CPU_BASELINE_FLAGS="-march=x86-64 -mtune=generic"
+		CPU_BASELINE_RUST_CPU=x86-64
+		;;
+	linux-arm64 | darwin-arm64)
+		CPU_BASELINE=armv8-a
+		CPU_BASELINE_FLAGS="-march=armv8-a -mtune=generic"
+		CPU_BASELINE_RUST_CPU=generic
+		;;
+	*)
+		printf 'unsupported CPU baseline platform: %s\n' "$1" >&2
+		return 1
+		;;
+	esac
+	CFLAGS="${CFLAGS:--O2} $CPU_BASELINE_FLAGS"
+	CXXFLAGS="${CXXFLAGS:--O2} $CPU_BASELINE_FLAGS"
+	export CPU_BASELINE CPU_BASELINE_FLAGS CPU_BASELINE_RUST_CPU CFLAGS CXXFLAGS
+}
+
 # setup_linux_toolchain — call after the script's apt install (needs lld).
 # Prefers gcc-16 (newest in 26.04, vs the 15.x default), else falls back to the
 # system compiler. Links via lld; -static-libgcc keeps shipped .so's free of a

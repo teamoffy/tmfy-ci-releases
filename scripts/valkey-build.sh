@@ -18,6 +18,7 @@ prefix="$work/stage/opt/valkey"
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$script_dir/lib.sh"
+setup_cpu_baseline "$platform"
 require_linux valkey-build.sh "unpacks Linux server binaries and needs cargo for the bloom module"
 
 # Native build: the host arch has to match the server tarball we unpack.
@@ -49,7 +50,8 @@ tar -xzf "$work/valkey.tar.gz" -C "$prefix" --strip-components=1
 bloom_url="https://github.com/valkey-io/valkey-bloom/archive/refs/tags/${bloom_version}.tar.gz"
 fetch "$bloom_url" "$work/bloom.tar.gz" "${BLOOM_UPSTREAM_SHA256:-}"
 tar -xzf "$work/bloom.tar.gz" -C "$work"
-cargo build --release --manifest-path "$work/valkey-bloom-${bloom_version}/Cargo.toml"
+RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=$CPU_BASELINE_RUST_CPU" \
+	cargo build --release --manifest-path "$work/valkey-bloom-${bloom_version}/Cargo.toml"
 cp "$work/valkey-bloom-${bloom_version}/target/release/libvalkey_bloom.so" "$prefix/modules/"
 
 # Smoke: boot the server with the module loaded.
@@ -75,8 +77,11 @@ trap - EXIT INT TERM
 	echo "product=valkey"
 	echo "version=${valkey_version}-bloom${bloom_version}"
 	echo "platform=$platform"
+	echo "cpu-baseline=$CPU_BASELINE"
+	echo "cflags=$CFLAGS"
+	echo "cxxflags=$CXXFLAGS"
 	echo "server-source=$valkey_url (official noble build)"
-	echo "bloom-build=cargo release"
+	echo "bloom-build=cargo release target-cpu=$CPU_BASELINE_RUST_CPU"
 	echo "upstream-checksums:"
 	cat "$UPSTREAM_SHA_LOG"
 	true

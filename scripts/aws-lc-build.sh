@@ -22,6 +22,7 @@ esac
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$script_dir/lib.sh"
+setup_cpu_baseline "$platform"
 rm -rf "$work"
 mkdir -p "$prefix" "$out"
 
@@ -133,6 +134,9 @@ fi
 	echo "product=aws-lc"
 	echo "version=$version"
 	echo "platform=$platform"
+	echo "cpu-baseline=$CPU_BASELINE"
+	echo "cflags=$CFLAGS"
+	echo "cxxflags=$CXXFLAGS"
 	echo "upstream-url=$url"
 	echo "upstream-sha256=$upstream_sha"
 	echo "flags=Release BUILD_SHARED_LIBS=1 BUILD_LIBSSL=ON BUILD_TESTING=OFF DISABLE_CPU_JITTER_ENTROPY=ON"

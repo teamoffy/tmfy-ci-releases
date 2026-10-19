@@ -22,6 +22,7 @@ esac
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$script_dir/lib.sh"
+setup_cpu_baseline "$platform"
 rm -rf "$work"
 mkdir -p "$prefix" "$out"
 
@@ -62,6 +63,8 @@ cmake -S "$src" -B "$work/build" -G Ninja \
 	-DCMAKE_INSTALL_PREFIX="$prefix" \
 	-DBUILD_SHARED_LIBS=ON \
 	-DZLIB_COMPAT=OFF \
+	-DWITH_NATIVE_INSTRUCTIONS=OFF \
+	-DWITH_RUNTIME_CPU_DETECTION=ON \
 	$extra_cmake
 cmake --build "$work/build" --parallel "$(ncpu)"
 cmake --install "$work/build"
@@ -99,9 +102,12 @@ esac
 	echo "product=zlib-ng"
 	echo "version=$version"
 	echo "platform=$platform"
+	echo "cpu-baseline=$CPU_BASELINE"
+	echo "cflags=$CFLAGS"
+	echo "cxxflags=$CXXFLAGS"
 	echo "upstream-url=$url"
 	echo "upstream-sha256=$upstream_sha"
-	echo "flags=Release BUILD_SHARED_LIBS=ON ZLIB_COMPAT=OFF"
+	echo "flags=Release BUILD_SHARED_LIBS=ON ZLIB_COMPAT=OFF WITH_NATIVE_INSTRUCTIONS=OFF WITH_RUNTIME_CPU_DETECTION=ON"
 	echo "cc=$(${CC:-cc} --version | head -n 1)"
 	echo "cmake=$(cmake --version | head -n 1)"
 	true

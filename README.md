@@ -59,6 +59,26 @@ Version tracking:
   the current LTS series (9.7 today); within it, the newest git tag whose
   generic tarball is actually published wins — the CDN can lag the tag.
 
+## CPU compatibility
+
+Source-built userland libraries and Valkey's bloom module use an architectural
+baseline rather than the build runner's CPU: `x86-64` on Linux x64 and
+`armv8-a` on Linux/macOS arm64, with generic tuning. Release optimization
+remains enabled. AWS-LC, zlib-ng, zstd, and pgvector retain their runtime-selected
+accelerated implementations; instructions above the baseline belong in
+CPU-dispatched paths, not unconditional code. PostgreSQL explicitly overrides
+pgvector's upstream `-march=native` default. The Rust bloom module uses the
+`x86-64` or `generic` Rust target CPU. `BUILD-INFO.txt` records the baseline
+and C/C++ flags.
+
+OpenZFS follows the target Flatcar developer container and kernel configuration.
+Repacked binaries and OCI images retain upstream CPU requirements, not the
+repack runner's CPU. In particular, standard Bun x64 bundles require AVX2.
+Passing a smoke test on one runner does not prove a lower CPU baseline.
+
+Run `sh scripts/cpu-baseline-test.sh` to check baseline selection, builder
+wiring, runtime-dispatch settings, and compiler feature macros on the host.
+
 ## Mirrored node boot artifacts
 
 Two products exist because every cluster node downloads them at boot:
