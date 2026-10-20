@@ -13,7 +13,7 @@ on:
         description: >-
           Product to force-rebuild (always builds and replaces its release assets). One of:
           aws-lc, bun, openjdk, zlib-ng, postgres, mysql, valkey, clickhouse,
-          pebble, typesense, zstd, libgit2, sqlite-vec, llama-embedding,
+          pebble, typesense, zstd, libgit2, sqlite, sqlite-vec, llama-embedding,
           playwright-browsers, playwright-deps, chrome-for-testing,
           oci-mirror (or oci-<name>), k3s, k3s-system, flatcar,
           flatcar-zfs-sysext, ci-tools (or a tool name from ci-tools.txt),
@@ -96,6 +96,8 @@ jobs:
       libgit2_build: ${{ steps.resolve.outputs.libgit2_build }}
       sqlite_vec_version: ${{ steps.resolve.outputs.sqlite_vec_version }}
       sqlite_vec_build: ${{ steps.resolve.outputs.sqlite_vec_build }}
+      sqlite_version: ${{ steps.resolve.outputs.sqlite_version }}
+      sqlite_build: ${{ steps.resolve.outputs.sqlite_build }}
       playwright_browsers_version: ${{ steps.resolve.outputs.playwright_browsers_version }}
       playwright_browsers_build: ${{ steps.resolve.outputs.playwright_browsers_build }}
       playwright_deps_version: ${{ steps.resolve.outputs.playwright_deps_version }}
@@ -1184,6 +1186,92 @@ jobs:
           - License: see upstream (Google Chrome for Testing terms)
           EOF
 
+  build-sqlite:
+    needs: check
+    if: needs.check.outputs.sqlite_build == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runs-on: ubuntu-26.04
+          - platform: linux-arm64
+            runs-on: ubuntu-26.04-arm
+          - platform: darwin-arm64
+            runs-on: macos-26
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Build and pack SQLite
+        env:
+          SQLITE_PLATFORM: ${{ matrix.platform }}
+          SQLITE_WORK: ${{ runner.temp }}/sqlite-build
+        run: sh scripts/sqlite-build.sh "${{ needs.check.outputs.sqlite_version }}"
+      - name: Verify installed SQLite
+        env:
+          VERSION: ${{ needs.check.outputs.sqlite_version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -eu
+          sudo tar --zstd -xf "$RUNNER_TEMP/sqlite-build/out/sqlite-$VERSION-$PLATFORM.tar.zst" -C /
+          /opt/sqlite/bin/sqlite3 --version
+          [ "$(/opt/sqlite/bin/sqlite3 :memory: 'SELECT sqlite_version()')" = "$VERSION" ]
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sqlite-${{ matrix.platform }}
+          path: ${{ runner.temp }}/sqlite-build/out/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  release-sqlite:
+    needs: [check, build-sqlite]
+    if: needs.check.outputs.sqlite_build == 'true' && needs.build-sqlite.result == 'success'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.check.outputs.sqlite_version }}
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sqlite-linux-*
+          merge-multiple: true
+          path: assets
+      - name: Download macOS build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sqlite-darwin-arm64
+          path: assets
+      - name: Publish release
+        run: |
+          set -eu
+          upstream_sha=$(head -n 1 assets/upstream-sha256.txt)
+          release_page=$(printf '%s' "$VERSION" | tr . _)
+          sh scripts/publish-release.sh "sqlite/v${VERSION}" "SQLite ${VERSION}" assets <<EOF
+          Prebuilt SQLite ${VERSION} for Linux x64, Linux arm64, and macOS arm64.
+
+          - Upstream: https://www.sqlite.org/releaselog/${release_page}.html
+          - Source archive SHA256 (measured): \`${upstream_sha}\`. The sqlite3.c SHA3-256 is verified against the upstream release log and recorded in BUILD-INFO.txt.
+          - Build: shared/static libraries, dynamically linked CLI, FTS5, RTree, dbstat, column metadata, statement scan status, thread safety, and extension loading.
+          - Smoke-tested: shared-library SQL round trip and exact library/CLI version, both before packing and after extraction.
+          - Layout: extract at \`/\` to install into \`/opt/sqlite\`. Prepend \`/opt/sqlite/bin\` to PATH and select \`/opt/sqlite/lib/libsqlite3.so\` (\`libsqlite3.dylib\` on macOS) explicitly; system SQLite files are not replaced.
+          - Verify: \`sha256sum -c SHA256SUMS.txt\`
+          - License: public domain (SQLite)
+          EOF
+
   # ------------------------------------------------------------- sqlite-vec
   # Upstream ships the loadable vec0 extension; the repack only verifies and
   # re-archives it. Each platform uses a native runner so the smoke test loads
@@ -2003,6 +2091,7 @@ jobs:
         release-typesense,
         release-zstd,
         release-libgit2,
+        release-sqlite,
         release-sqlite-vec,
         release-playwright-browsers,
         release-playwright-deps,

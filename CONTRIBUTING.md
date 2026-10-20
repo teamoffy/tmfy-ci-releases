@@ -3,7 +3,7 @@
 ## Pipeline
 
 One workflow ([`release.yml`](.github/workflows/release.yml)), one run every
-2nd day (06:17 UTC), 51 jobs:
+2nd day (06:17 UTC):
 
 1. **check** — resolves every product's target version from upstream (GitHub
    releases where they exist, git tags or index listings where they don't, the
@@ -64,6 +64,7 @@ exact upstream release. `stacks` republishes the resolved stacks release
 
 ```sh
 gh workflow run release.yml -f product=zstd -f version=1.5.7
+gh workflow run release.yml -f product=sqlite -f version=3.54.1
 gh workflow run release.yml -f product=oci-mirror -f version=cilium:v1.20.1
 gh workflow run release.yml -f product=oci-cilium -f version=v1.20.1
 gh workflow run release.yml -f product=flatcar-zfs-sysext -f version=4593.2.5/2.4.4
@@ -214,7 +215,7 @@ GH_TOKEN=$(gh auth token) GITHUB_REPOSITORY=teamoffy/tmfy-ci-releases \
 
 What runs where:
 
-- **Published macOS targets** — aws-lc, zlib-ng, and zstd build natively on
+- **Published macOS targets** — aws-lc, zlib-ng, zstd, and sqlite build natively on
   macOS with their smoke tests included. Bun repacks and verifies upstream's
   Linux and macOS zips on the Linux runner; sqlite-vec and llama-embedding
   repack upstream's binaries on each platform's native runner so their smoke

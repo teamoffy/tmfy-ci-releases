@@ -29,7 +29,7 @@ if (setup_cpu_baseline linux-riscv64 >/dev/null 2>&1); then
 	exit 1
 fi
 
-for product in aws-lc zlib-ng zstd libgit2 postgres valkey; do
+for product in aws-lc zlib-ng zstd libgit2 postgres valkey sqlite; do
 	grep -Fqx "setup_cpu_baseline \"\$platform\"" "$script_dir/$product-build.sh"
 	grep -Fq "echo \"cpu-baseline=\$CPU_BASELINE\"" "$script_dir/$product-build.sh"
 done
