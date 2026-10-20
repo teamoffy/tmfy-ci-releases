@@ -52,7 +52,7 @@ force_pulumi_plugin=
 force_all_pulumi_plugins=false
 force_stacks=false
 case "$force_product" in
-"" | aws-lc | bun | openjdk | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext | playwright-browsers | playwright-deps | chrome-for-testing) ;;
+"" | aws-lc | bun | openjdk | zlib-ng | postgres | mysql | valkey | clickhouse | pebble | typesense | zstd | libgit2 | sqlite | sqlite-vec | llama-embedding | k3s | k3s-system | flatcar | flatcar-zfs-sysext | playwright-browsers | playwright-deps | chrome-for-testing) ;;
 oci-mirror)
 	if [ -n "$force_version" ]; then
 		case "$force_version" in
@@ -621,6 +621,22 @@ fi
 }
 printf 'libgit2_ver=%s\nlibgit2_ssh2=%s\n' "$lg" "$ssh2" >>"$out"
 decide libgit2 "${lg}-libssh2-${ssh2}"
+
+# -------------------------------------------------------------------- sqlite
+if [ "$force_product" = sqlite ] && [ -n "$force_version" ]; then
+	sqlite_version=$force_version
+else
+	sqlite_version=$(latest_tag sqlite/sqlite 'refs/tags/version-*' \
+		'^version-[0-9]+\.[0-9]+\.[0-9]+$' 's/^version-//')
+fi
+if ! printf '%s\n' "$sqlite_version" | awk '
+	NR == 1 && /^3\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$/ { valid = 1 }
+	END { if (NR != 1 || !valid) exit 1 }
+'; then
+	echo "check.sh: invalid SQLite version '$sqlite_version' (expected 3.MINOR.PATCH)" >&2
+	exit 1
+fi
+decide sqlite "$sqlite_version"
 
 # ---------------------------------------------------------------- sqlite-vec
 # Upstream publishes loadable-extension tarballs; the repack only mirrors them.

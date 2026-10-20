@@ -27,6 +27,7 @@ matrix. The newest 45 releases per product are kept.
 | zstd | [facebook/zstd](https://github.com/facebook/zstd) | linux-x64, linux-arm64, darwin-arm64 | `/opt/zstd` |
 | libgit2 | [libgit2](https://github.com/libgit2/libgit2) + [libssh2](https://github.com/libssh2/libssh2) | linux-x64, linux-arm64 | `/opt/libgit2` |
 | sqlite-vec | [asg017/sqlite-vec](https://github.com/asg017/sqlite-vec) | linux-x64, linux-arm64, darwin-arm64 | `/opt/sqlite-vec` |
+| sqlite | [SQLite](https://sqlite.org/) stable release tags | linux-x64, linux-arm64, darwin-arm64 | `/opt/sqlite` |
 | playwright-browsers | [microsoft/playwright](https://github.com/microsoft/playwright) browser builds (Chromium headless shell, WebKit, FFmpeg) | linux-x64, linux-arm64 (ubuntu-26.04 WebKit), darwin-arm64 | `ms-playwright/` cache tree |
 | playwright-deps | [microsoft/playwright](https://github.com/microsoft/playwright) — the apt package set `install-deps` resolves | ubuntu-26.04-x64, ubuntu-26.04-arm64 | extracted `debs/` for `dpkg -i` |
 | chrome-for-testing | [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) `chrome` builds at consumer-pinned versions | linux-x64, linux-arm64, darwin-arm64 | `chrome-for-testing/<ver>/<upstream-platform>/` under a browser cache root |
@@ -263,6 +264,14 @@ Product notes:
   extract at the destination (`tar --zstd -xf <asset> -C <dest>`) and use
   `<dest>/home` as `JAVA_HOME` (`<dest>/home/bin/java`); the macOS bundle's
   `Contents/Home` nesting is flattened to the same layout.
+- **sqlite**: native shared/static libraries, headers, and a dynamically linked
+  `sqlite3` CLI. The amalgamation's `sqlite3.c` is checked against the release
+  log's SHA3-256; `BUILD-INFO.txt` records the source archive's measured SHA256.
+  FTS5, RTree, dbstat, column metadata, statement scan status, thread safety,
+  and extension loading are enabled. The shared-library round trip and CLI
+  version are smoke-tested before packing and after extraction. Prepend
+  `/opt/sqlite/bin` to `PATH` and select `/opt/sqlite/lib/libsqlite3.so`
+  (`libsqlite3.dylib` on macOS) explicitly; system library files stay untouched.
 - **sqlite-vec**: repack of upstream's loadable `vec0` extension at
   `opt/sqlite-vec/lib/vec0.so` (`vec0.dylib` on macOS). Verified against
   upstream `checksums.txt` and smoke-tested by loading the extension
