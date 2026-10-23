@@ -176,9 +176,12 @@ k3s-system images, and `rancher/k3s-upgrade` at the same version.
 The resolved sets seed the build matrices and are published as a
 content-addressed `stacks/v<hash>` release whose `stacks.txt` asset carries
 one `<cloud> <product> <version-or-tag>` row per deployed version — that is
-what consumers read, not the declaration file. A cloud whose new set has an
-upstream artifact that is not servable yet is held out of the published file
-until a later run; an unchanged resolution republishes nothing.
+what consumers read, not the declaration file. For Kubernetes-minor-coupled
+GitHub release images, the resolver picks the newest servable patch that
+matches the cloud's allowed minor(s), so registry promotion lag does not hold
+back a compatible older patch in that minor. If no compatible image is
+servable, or another required image cannot be mirrored, that cloud is held out
+until a later run. An unchanged resolution republishes nothing.
 
 `oci-images.txt` remains the mirror's tracked set (each image at upstream
 latest) — the stacks resolution picks which of those versions each cloud

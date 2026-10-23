@@ -367,6 +367,28 @@ oci_probe() { # <repo:tag> — is this image actually pushed?
 	skopeo inspect --raw --retry-times 3 "docker://$1" >/dev/null 2>&1
 }
 
+# newest_servable_release_matching <owner/repo> <tag-regex> <sed> <image-repo>
+# — newest stable release matching a Kubernetes rule whose image is on the
+# registry. A release can precede registry promotion, so keep searching older
+# patches within the same allowed minor(s).
+newest_servable_release_matching() {
+	_nsr_json=$(gh api "repos/$1/releases?per_page=100") || {
+		echo "check.sh: failed to list releases for $1" >&2
+		exit 1
+	}
+	printf '%s\n' "$_nsr_json" | jq -r '
+		.[] | select((.draft | not) and (.prerelease | not) and .published_at)
+		| select('"$jq_aged"')
+		| .tag_name' | grep -E "$2" | sort -Vr |
+		while IFS= read -r _nsr_tag; do
+			_nsr_image=$(printf '%s\n' "$_nsr_tag" | sed "$3")
+			if oci_probe "$4:$_nsr_image"; then
+				printf '%s\n' "$_nsr_image"
+				break
+			fi
+		done
+}
+
 # Print the newest image tag that is actually on the registry. Upstream's
 # latest release is preferred, but a GitHub release can precede (or skip)
 # registry promotion — an unpromoted release is not eligible, so fall back
@@ -899,9 +921,9 @@ oci_latest_tag() {
 	printf '%s\n' "$_ol_tag"
 }
 
-# stack_minor_tag <registry-repo> <source> <sed> <rule> <minor> — newest tag
-# for a k8s-minor-coupled component (empty when the rule has nothing for the
-# minor, which steps the cloud down one minor).
+# stack_minor_tag <registry-repo> <source> <sed> <rule> <minor> — newest
+# servable tag for a k8s-minor-coupled component (empty when the rule has no
+# image for the minor, which steps the cloud down one minor).
 stack_minor_tag() {
 	case "$4" in
 	minor) _sm_re="^v$(esc_dots "$5")\\.[0-9]+$" ;;
@@ -917,7 +939,7 @@ stack_minor_tag() {
 	*)
 		_sm_sed=$3
 		case "$_sm_sed" in '' | -) _sm_sed='s/$//' ;; esac
-		latest_release_matching "$2" "$_sm_re" "$_sm_sed" ;;
+		newest_servable_release_matching "$2" "$_sm_re" "$_sm_sed" "$1" ;;
 	esac
 }
 
