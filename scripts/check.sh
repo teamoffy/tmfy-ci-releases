@@ -252,6 +252,8 @@ cilium_envoy_tag() {
 # the release tag). Cilium runs on every node, so a release that does not
 # list the cloud's minor is a break risk: no match steps the cloud down a
 # minor. One patch per minor line is checked, newest first.
+# Narrow prerelease exception: v1.21.0-pre.3 documents Kubernetes 1.37 as
+# e2e-tested. Keep all other prereleases excluded from stack resolution.
 cilium_for_minor() {
 	_cf_minor=$1
 	_cf_json=$(gh api "repos/cilium/cilium/releases?per_page=100") || {
@@ -259,7 +261,8 @@ cilium_for_minor() {
 		exit 1
 	}
 	for _cf_tag in $(printf '%s\n' "$_cf_json" | jq -r '
-		.[] | select((.draft | not) and (.prerelease | not) and .published_at)
+		.[] | select((.draft | not) and .published_at
+		  and ((.prerelease | not) or .tag_name == "v1.21.0-pre.3"))
 		| select('"$jq_aged"')
 		| .tag_name' | sort -Vr | awk -F. '!seen[$1 "." $2]++'); do
 		_cf_supported="$oci_work/cilium-supported-$_cf_tag"
