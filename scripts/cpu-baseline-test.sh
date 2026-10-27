@@ -8,7 +8,7 @@ cd "$script_dir/.."
 check_baseline() {
 	CFLAGS=-O3
 	CXXFLAGS=-O2
-	setup_cpu_baseline "$1"
+	setup_cpu_baseline "$1" "${4:-}"
 	[ "$CPU_BASELINE" = "$2" ]
 	[ "$CPU_BASELINE_FLAGS" = "-march=$2 -mtune=generic" ]
 	[ "$CPU_BASELINE_RUST_CPU" = "$3" ]
@@ -20,6 +20,7 @@ check_baseline() {
 check_baseline linux-x64 x86-64 x86-64
 check_baseline linux-arm64 armv8-a generic
 check_baseline darwin-arm64 armv8-a generic
+check_baseline darwin-arm64 armv8-a+crypto generic apple-crypto
 unset CFLAGS CXXFLAGS
 setup_cpu_baseline linux-x64
 [ "$CFLAGS" = "-O2 $CPU_BASELINE_FLAGS" ]
@@ -28,9 +29,16 @@ if (setup_cpu_baseline linux-riscv64 >/dev/null 2>&1); then
 	printf '%s\n' 'unsupported CPU baseline was accepted' >&2
 	exit 1
 fi
+if (setup_cpu_baseline linux-arm64 apple-crypto >/dev/null 2>&1); then
+	printf '%s\n' 'Apple crypto baseline was accepted for Linux' >&2
+	exit 1
+fi
 
 for product in aws-lc zlib-ng zstd libgit2 postgres valkey sqlite; do
-	grep -Fqx "setup_cpu_baseline \"\$platform\"" "$script_dir/$product-build.sh"
+	case "$product" in
+	aws-lc) grep -Fqx "setup_cpu_baseline \"\$platform\" \"\$cpu_profile\"" "$script_dir/$product-build.sh" ;;
+	*) grep -Fqx "setup_cpu_baseline \"\$platform\"" "$script_dir/$product-build.sh" ;;
+	esac
 	grep -Fq "echo \"cpu-baseline=\$CPU_BASELINE\"" "$script_dir/$product-build.sh"
 done
 awk '
@@ -67,4 +75,20 @@ printf '%s\n' \
 	'#endif' \
 	'int baseline_probe;' |
 	"${CC:-cc}" "$optimization" "$architecture" "$tuning" -x c -fsyntax-only -
+if [ "$host_platform" = darwin-arm64 ]; then
+	CFLAGS='' CXXFLAGS=''
+	setup_cpu_baseline darwin-arm64 apple-crypto
+	IFS=' ' read -r optimization architecture tuning <<EOF
+$CFLAGS
+EOF
+	printf '%s\n' \
+		'#if !defined(__ARM_NEON) || !defined(__ARM_FEATURE_AES) || !defined(__ARM_FEATURE_SHA2)' \
+		'#error Apple arm64 crypto baseline is missing required features' \
+		'#endif' \
+		'#if defined(__ARM_FEATURE_SVE) || defined(__ARM_FEATURE_ATOMICS) || defined(__ARM_FEATURE_SHA3) || defined(__ARM_FEATURE_SHA512)' \
+		'#error compiler enabled instructions above the Apple arm64 crypto baseline' \
+		'#endif' \
+		'int apple_crypto_probe;' |
+		"${CC:-cc}" "$optimization" "$architecture" "$tuning" -x c -fsyntax-only -
+fi
 printf '%s\n' 'CPU baseline checks passed'
