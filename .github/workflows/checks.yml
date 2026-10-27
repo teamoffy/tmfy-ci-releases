@@ -13,6 +13,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  validate-macos-aws-lc:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - name: Clone the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+      - name: Check CPU baselines
+        run: sh scripts/cpu-baseline-test.sh
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: Build AWS-LC regression version
+        env:
+          AWS_LC_PLATFORM: darwin-arm64
+          AWS_LC_WORK: ${{ runner.temp }}/aws-lc-regression
+          AWS_LC_UPSTREAM_SHA256: 52c7f98ffd296d267cc015ad4653d1ffae399db65b14421da4f5f7efc44becd2
+        run: sh scripts/aws-lc-build.sh 5.12.0
+
   validate:
     runs-on: ubuntu-26.04
     timeout-minutes: 10

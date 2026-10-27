@@ -72,6 +72,10 @@ pgvector's upstream `-march=native` default. The Rust bloom module uses the
 `x86-64` or `generic` Rust target CPU. `BUILD-INFO.txt` records the baseline
 and C/C++ flags.
 
+AWS-LC on macOS arm64 uses `armv8-a+crypto`: Apple arm64 provides the ARMv8
+crypto extensions, which AWS-LC requires at compile time. Later extensions
+remain runtime-dispatched.
+
 OpenZFS follows the target Flatcar developer container and kernel configuration.
 Repacked binaries and OCI images retain upstream CPU requirements, not the
 repack runner's CPU. In particular, standard Bun x64 bundles require AVX2.
