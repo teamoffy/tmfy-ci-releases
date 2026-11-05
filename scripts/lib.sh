@@ -101,19 +101,19 @@ ensure_cmds() {
 setup_cpu_baseline() {
 	case "$1:${2:-}" in
 	linux-x64:)
-		CPU_BASELINE=x86-64
-		CPU_BASELINE_FLAGS="-march=x86-64 -mtune=generic"
-		CPU_BASELINE_RUST_CPU=x86-64
+		CPU_BASELINE=x86-64-v3
+		CPU_BASELINE_FLAGS="-march=x86-64-v3 -mtune=generic"
+		CPU_BASELINE_RUST_CPU=x86-64-v3
 		;;
-	linux-arm64: | darwin-arm64:)
+	linux-arm64:)
 		CPU_BASELINE=armv8-a
 		CPU_BASELINE_FLAGS="-march=armv8-a -mtune=generic"
 		CPU_BASELINE_RUST_CPU=generic
 		;;
-	darwin-arm64:apple-crypto)
-		CPU_BASELINE=armv8-a+crypto
-		CPU_BASELINE_FLAGS="-march=armv8-a+crypto -mtune=generic"
-		CPU_BASELINE_RUST_CPU=generic
+	darwin-arm64:)
+		CPU_BASELINE=apple-m1
+		CPU_BASELINE_FLAGS="-mcpu=apple-m1"
+		CPU_BASELINE_RUST_CPU=apple-m1
 		;;
 	*)
 		printf 'unsupported CPU baseline platform/profile: %s %s\n' "$1" "${2:-}" >&2

@@ -22,13 +22,7 @@ esac
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$script_dir/lib.sh"
-# Apple arm64 guarantees NEON and the ARMv8 crypto extensions. AWS-LC 5.12+
-# requires the compiler to expose them, while later extensions remain dynamic.
-case "$platform" in
-darwin-arm64) cpu_profile=apple-crypto ;;
-*) cpu_profile= ;;
-esac
-setup_cpu_baseline "$platform" "$cpu_profile"
+setup_cpu_baseline "$platform"
 rm -rf "$work"
 mkdir -p "$prefix" "$out"
 
