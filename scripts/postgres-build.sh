@@ -31,7 +31,7 @@ mkdir -p "$prefix" "$out" "$work/src/postgresql" "$work/src/timescaledb" "$work/
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
 	bison build-essential cmake flex libicu-dev libreadline-dev libssl-dev \
-	lld pkg-config zlib1g-dev zstd
+	mold pkg-config zlib1g-dev zstd
 setup_linux_toolchain
 
 UPSTREAM_SHA_LOG="$work/upstream-sha256s.txt"

@@ -35,7 +35,7 @@ UPSTREAM_SHA_LOG="$work/upstream-sha256s.txt"
 
 # cargo builds the bloom module; build-essential gives rustc a C linker.
 sudo apt-get update
-sudo apt-get install -y --no-install-recommends build-essential cargo zstd
+sudo apt-get install -y --no-install-recommends build-essential cargo mold zstd
 
 # Official server binaries — the "noble" builds on download.valkey.io.
 valkey_url="https://download.valkey.io/releases/valkey-${valkey_version}-noble-${arch}.tar.gz"
@@ -50,7 +50,7 @@ tar -xzf "$work/valkey.tar.gz" -C "$prefix" --strip-components=1
 bloom_url="https://github.com/valkey-io/valkey-bloom/archive/refs/tags/${bloom_version}.tar.gz"
 fetch "$bloom_url" "$work/bloom.tar.gz" "${BLOOM_UPSTREAM_SHA256:-}"
 tar -xzf "$work/bloom.tar.gz" -C "$work"
-RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=$CPU_BASELINE_RUST_CPU" \
+RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-cpu=$CPU_BASELINE_RUST_CPU -C link-arg=-fuse-ld=mold" \
 	cargo build --release --manifest-path "$work/valkey-bloom-${bloom_version}/Cargo.toml"
 cp "$work/valkey-bloom-${bloom_version}/target/release/libvalkey_bloom.so" "$prefix/modules/"
 
@@ -81,7 +81,7 @@ trap - EXIT INT TERM
 	echo "cflags=$CFLAGS"
 	echo "cxxflags=$CXXFLAGS"
 	echo "server-source=$valkey_url (official noble build)"
-	echo "bloom-build=cargo release target-cpu=$CPU_BASELINE_RUST_CPU"
+	echo "bloom-build=cargo release target-cpu=$CPU_BASELINE_RUST_CPU linker=mold"
 	echo "upstream-checksums:"
 	cat "$UPSTREAM_SHA_LOG"
 	true

@@ -63,18 +63,18 @@ Version tracking:
 ## CPU compatibility
 
 Source-built userland libraries and Valkey's bloom module use an architectural
-baseline rather than the build runner's CPU: `x86-64` on Linux x64 and
-`armv8-a` on Linux/macOS arm64, with generic tuning. Release optimization
-remains enabled. AWS-LC, zlib-ng, zstd, and pgvector retain their runtime-selected
-accelerated implementations; instructions above the baseline belong in
-CPU-dispatched paths, not unconditional code. PostgreSQL explicitly overrides
-pgvector's upstream `-march=native` default. The Rust bloom module uses the
-`x86-64` or `generic` Rust target CPU. `BUILD-INFO.txt` records the baseline
+baseline rather than the build runner's CPU: `x86-64-v3` on Linux x64 and
+`armv8-a` on Linux arm64, and `apple-m1` on macOS arm64. The macOS baseline
+requires an Apple M1 or newer processor. Release optimization remains enabled.
+AWS-LC, zlib-ng, zstd, and pgvector retain their runtime-selected accelerated
+implementations; instructions above the baseline belong in CPU-dispatched
+paths, not unconditional code. PostgreSQL explicitly overrides pgvector's
+upstream `-march=native` default. The Rust bloom module uses the `x86-64-v3`,
+`generic`, or `apple-m1` Rust target CPU. `BUILD-INFO.txt` records the baseline
 and C/C++ flags.
 
-AWS-LC on macOS arm64 uses `armv8-a+crypto`: Apple arm64 provides the ARMv8
-crypto extensions, which AWS-LC requires at compile time. Later extensions
-remain runtime-dispatched.
+The x86-64-v3 baseline requires AVX2, FMA, BMI1/2, and related features; older
+x86-64 CPUs without v3 support cannot run these source-built x64 artifacts.
 
 OpenZFS follows the target Flatcar developer container and kernel configuration.
 Repacked binaries and OCI images retain upstream CPU requirements, not the

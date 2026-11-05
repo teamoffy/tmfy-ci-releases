@@ -30,7 +30,7 @@ mkdir -p "$prefix" "$out"
 
 if [ "$os" = linux ]; then
 	sudo apt-get update
-	sudo apt-get install -y --no-install-recommends build-essential lld python3 zstd
+	sudo apt-get install -y --no-install-recommends build-essential mold python3 zstd
 	setup_linux_toolchain
 	LDFLAGS="$LDFLAGS -Wl,-rpath,/opt/sqlite/lib"
 	export LDFLAGS
@@ -105,7 +105,7 @@ smoke() {
 	[ -f "$library" ]
 	[ -s "$root/lib/libsqlite3.a" ]
 	[ -s "$root/include/sqlite3.h" ] && [ -s "$root/include/sqlite3ext.h" ]
-	${CC:-cc} -O2 -I"$root/include" "$work/smoke.c" \
+	${CC:-cc} -O3 -I"$root/include" "$work/smoke.c" \
 		-L"$root/lib" -lsqlite3 -Wl,-rpath,"$root/lib" -o "$work/smoke"
 	library_version=$(LD_LIBRARY_PATH="$root/lib" DYLD_LIBRARY_PATH="$root/lib" "$work/smoke")
 	cli_version=$(LD_LIBRARY_PATH="$root/lib" DYLD_LIBRARY_PATH="$root/lib" "$root/bin/sqlite3" :memory: 'SELECT sqlite_version()')
