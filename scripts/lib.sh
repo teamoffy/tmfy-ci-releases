@@ -120,20 +120,20 @@ setup_cpu_baseline() {
 		return 1
 		;;
 	esac
-	CFLAGS="${CFLAGS:--O2} $CPU_BASELINE_FLAGS"
-	CXXFLAGS="${CXXFLAGS:--O2} $CPU_BASELINE_FLAGS"
+	CFLAGS="${CFLAGS:--O3} $CPU_BASELINE_FLAGS"
+	CXXFLAGS="${CXXFLAGS:--O3} $CPU_BASELINE_FLAGS"
 	export CPU_BASELINE CPU_BASELINE_FLAGS CPU_BASELINE_RUST_CPU CFLAGS CXXFLAGS
 }
 
-# setup_linux_toolchain — call after the script's apt install (needs lld).
+# setup_linux_toolchain — call after the script's apt install (needs mold).
 # Prefers gcc-16 (newest in 26.04, vs the 15.x default), else falls back to the
-# system compiler. Links via lld; -static-libgcc keeps shipped .so's free of a
+# system compiler. Links via mold; -static-libgcc keeps shipped .so's free of a
 # libgcc_s runtime dep.
 setup_linux_toolchain() {
 	if sudo apt-get install -y --no-install-recommends gcc-16 g++-16 >/dev/null 2>&1; then
 		export CC=gcc-16 CXX=g++-16
 	fi
-	export LDFLAGS="${LDFLAGS:+$LDFLAGS }-fuse-ld=lld -static-libgcc"
+	export LDFLAGS="${LDFLAGS:+$LDFLAGS }-fuse-ld=mold -static-libgcc"
 }
 
 # verify_extract <asset.tar.zst> <dir> — fresh-extract for post-pack checks.

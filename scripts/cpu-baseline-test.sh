@@ -23,8 +23,8 @@ check_baseline darwin-arm64 armv8-a generic
 check_baseline darwin-arm64 armv8-a+crypto generic apple-crypto
 unset CFLAGS CXXFLAGS
 setup_cpu_baseline linux-x64
-[ "$CFLAGS" = "-O2 $CPU_BASELINE_FLAGS" ]
-[ "$CXXFLAGS" = "-O2 $CPU_BASELINE_FLAGS" ]
+[ "$CFLAGS" = "-O3 $CPU_BASELINE_FLAGS" ]
+[ "$CXXFLAGS" = "-O3 $CPU_BASELINE_FLAGS" ]
 if (setup_cpu_baseline linux-riscv64 >/dev/null 2>&1); then
 	printf '%s\n' 'unsupported CPU baseline was accepted' >&2
 	exit 1

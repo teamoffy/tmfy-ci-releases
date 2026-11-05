@@ -32,7 +32,7 @@ mkdir -p "$prefix" "$out"
 if [ "$os" = linux ]; then
 	sudo apt-get update
 	sudo apt-get install -y --no-install-recommends \
-		build-essential cmake lld libssl-dev ninja-build pkg-config zstd
+		build-essential cmake mold libssl-dev ninja-build pkg-config zstd
 	setup_linux_toolchain
 else
 	brew list --versions openssl@3 >/dev/null 2>&1 || brew install openssl@3
@@ -103,7 +103,7 @@ int main(void) {
 	return 0;
 }
 EOF
-${CC:-cc} -O2 -I"$prefix/include" "$work/smoke.c" \
+${CC:-cc} -O3 -I"$prefix/include" "$work/smoke.c" \
 	-L"$prefix/lib" -lgit2 -Wl,-rpath,"$prefix/lib" \
 	-o "$work/smoke"
 if [ "$os" = macos ]; then

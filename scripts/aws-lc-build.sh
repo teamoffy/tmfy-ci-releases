@@ -36,7 +36,7 @@ mkdir -p "$prefix" "$out"
 if [ "$os" = linux ]; then
 	sudo apt-get update
 	sudo apt-get install -y --no-install-recommends \
-		build-essential cmake ninja-build lld perl zstd
+		build-essential cmake ninja-build mold perl zstd
 	setup_linux_toolchain
 else
 	for f in cmake ninja go perl zstd; do
@@ -102,7 +102,7 @@ int main(void) {
 }
 EOF
 # shellcheck disable=SC2086
-${CC:-cc} -O2 -I"$prefix/include" "$work/smoke.c" $smoke_ldflags \
+${CC:-cc} -O3 -I"$prefix/include" "$work/smoke.c" $smoke_ldflags \
 	-L"$prefix/lib" -lssl -lcrypto -Wl,-rpath,"$prefix/lib" \
 	-o "$work/smoke"
 if [ "$os" = macos ]; then

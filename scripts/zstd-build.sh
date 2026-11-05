@@ -30,7 +30,7 @@ mkdir -p "$prefix" "$out"
 if [ "$os" = linux ]; then
 	sudo apt-get update
 	sudo apt-get install -y --no-install-recommends \
-		build-essential cmake ninja-build lld zstd
+		build-essential cmake ninja-build mold zstd
 	setup_linux_toolchain
 else
 	for f in cmake ninja zstd; do
@@ -83,7 +83,7 @@ int main(void) {
 	return ok ? 0 : 3;
 }
 EOF
-${CC:-cc} -O2 -I"$prefix/include" "$work/smoke.c" \
+${CC:-cc} -O3 -I"$prefix/include" "$work/smoke.c" \
 	-L"$prefix/lib" -lzstd -Wl,-rpath,"$prefix/lib" \
 	-o "$work/smoke"
 if [ "$os" = macos ]; then
